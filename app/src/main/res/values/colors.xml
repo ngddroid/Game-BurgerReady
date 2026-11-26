@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bv_cream">#FFFFF3DC</color>
+    <color name="bv_mustard">#FFFFC23C</color>
+    <color name="bv_tomato">#FFF2542D</color>
+    <color name="bv_cocoa">#FF3B2A3A</color>
+    <color name="ic_launcher_background">#FFFFC23C</color>
+</resources>

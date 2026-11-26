@@ -1,0 +1,60 @@
+# name | description (all original, synthesised) — engine loads assets/audio/sfx/<name>.wav
+ui_tap | soft rounded "bop" button tap, 60 ms
+ui_back | lower softer bop, 60 ms
+ui_tab | quick airy swish + tiny pluck, 120 ms
+ui_toggle | small click-pop, 50 ms
+ui_popup | bubbly rising "bloop" for dialogs opening, 200 ms
+ui_purchase | happy two-note chime + coin shimmer, 400 ms
+ui_error | gentle two-note descending buzz (not harsh), 250 ms
+ui_reward | sparkly ascending arpeggio, 600 ms
+ui_star1 | star stamp: punchy thump + bright ding (C), 350 ms
+ui_star2 | same, higher ding (E), 350 ms
+ui_star3 | same, highest ding (G) + sparkle tail, 500 ms
+ui_chest_open | wooden creak + magical shimmer burst, 900 ms
+ui_spin_tick | very short wooden tick, 25 ms
+ui_spin_win | short fanfare jingle, 1.2 s
+ui_level_unlock | lock clunk + shimmer, 600 ms
+ui_coin_tick | tiny metallic tick for count-up, 30 ms
+pickup | cheerful soft pop (engine raises pitch as the stack grows), 90 ms
+drop | soft thunk/plop onto a surface, 100 ms
+coin_collect | bright short coin ding, 120 ms
+coin_cascade | flurry of coin clinks, 700 ms
+cash_register | cartoon register "ka-ching", 500 ms
+pad_fill | short ratchet/tick, played repeatedly while paying, 40 ms
+build_pop | magical "poof" + ta-da sparkle when a station appears, 700 ms
+upgrade | rising synth sweep + chime, 700 ms
+hire | friendly whistle + pop, 500 ms
+sizzle_loop | grill sizzle, seamless loop, 2 s
+fryer_loop | bubbling oil, seamless loop, 2 s
+soda_pour | fizzy pour, 600 ms
+blender_whirr | short blender whirr, 800 ms
+customer_order | tiny cute "blip-blip" chirp, 150 ms
+customer_happy | happy cartoon chirp "yay", 300 ms
+customer_angry | grumpy low "hmph" grumble, 350 ms
+eat_chomp | cartoon chomp, 150 ms
+trash_dump | tray clatter into a bin, 400 ms
+footstep1 | soft step, 60 ms
+footstep2 | soft step variant, 60 ms
+combo_up1 | whoosh + pluck tier 1, 300 ms
+combo_up2 | brighter tier 2, 300 ms
+combo_up3 | brightest tier 3 with a shimmer, 400 ms
+combo_break | deflating slide-down, 400 ms
+rush_siren | playful two-tone siren swell (not scary), 1.5 s
+fire_whoosh | flame burst whoosh, 600 ms
+extinguish | foam spray puff, 700 ms
+spill_splat | wet cartoon splat, 300 ms
+mop_squeak | squeaky wipe, 300 ms
+raccoon_chitter | mischievous chitter, 500 ms
+machine_jam | metallic clunk + rattle, 500 ms
+machine_fixed | wrench ratchet + success ding, 500 ms
+car_horn | cute toy-car "meep meep", 400 ms
+car_engine | short toy engine putter, 1 s
+powerup | rising magic whoosh, 600 ms
+timer_tick | clock tick, 50 ms
+timer_warning | soft alarm beep for the last seconds, 200 ms
+level_win | triumphant 2-bar fanfare, 2.5 s
+level_fail | sad trombone-ish descending (cute, not mocking), 1.8 s
+vip_arrive | sparkly harp glissando, 800 ms
+critic_hmm | thoughtful "hmm" hum tone, 500 ms
+splash_pop | layered "pop" used for burger layers stacking on splash, 120 ms
+whoosh | camera/transition whoosh, 400 ms

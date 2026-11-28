@@ -40,11 +40,16 @@ object Art {
 
 /** Shows `assets/ui/<name>` if present, otherwise [fallback]. */
 @Composable
-fun ArtImage(name: String, modifier: Modifier = Modifier, scale: ContentScale = ContentScale.Fit, fallback: @Composable () -> Unit = {}) {
+fun ArtImage(name: String, modifier: Modifier = Modifier, scale: ContentScale = ContentScale.Fit, colorFilter: androidx.compose.ui.graphics.ColorFilter? = null, fallback: @Composable () -> Unit = {}) {
     val bmp = remember(name) { Art.get(name) }
-    if (bmp != null) Image(bmp, contentDescription = null, modifier = modifier, contentScale = scale)
+    if (bmp != null) Image(bmp, contentDescription = null, modifier = modifier, contentScale = scale, colorFilter = colorFilter)
     else Box(modifier, contentAlignment = Alignment.Center) { fallback() }
 }
+
+/** Greyed-out look for locked content: mostly desaturated, slightly lifted, never muddy-dark. */
+val LockedFilter: androidx.compose.ui.graphics.ColorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+    androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.25f) },
+)
 
 /** Vector burger drawn layer by layer (used on the splash and as a fallback illustration). */
 @Composable

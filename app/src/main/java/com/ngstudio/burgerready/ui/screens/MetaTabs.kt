@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -33,6 +35,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -43,7 +47,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ngstudio.burgerready.App
 import com.ngstudio.burgerready.game.Cosmetics
+import com.ngstudio.burgerready.game.Restaurants
 import com.ngstudio.burgerready.game.Stores
+import com.ngstudio.burgerready.game.Tour
 import com.ngstudio.burgerready.game.Upgrade
 import com.ngstudio.burgerready.ui.kit.ArtImage
 import com.ngstudio.burgerready.ui.kit.BucksIcon
@@ -61,6 +67,7 @@ import com.ngstudio.burgerready.ui.kit.StarIcon
 import com.ngstudio.burgerready.ui.kit.VectorBurger
 import com.ngstudio.burgerready.ui.kit.bob
 import com.ngstudio.burgerready.ui.kit.drawCorgiFace
+import com.ngstudio.burgerready.ui.kit.fadeTop
 import com.ngstudio.burgerready.ui.kit.formatNum
 import com.ngstudio.burgerready.ui.kit.pulse
 import com.ngstudio.burgerready.ui.theme.BV
@@ -79,7 +86,9 @@ private fun TabBackground(top: Color, bottom: Color, content: @Composable () -> 
                 y += step; row++
             }
         }
-        content()
+        // Scrolling content fades out under the floating top bar instead of sliding beneath the currency pills.
+        val top = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        Box(Modifier.fillMaxSize().fadeTop(clear = top + 62.dp, fade = 22.dp)) { content() }
     }
 }
 
@@ -102,7 +111,7 @@ fun ShopTab(openDialog: (HomeDialog) -> Unit) {
                 ShopBanner("Bonus Bucks (Ad)", "Debug build: mock rewarded ad", BV.Mustard) {
                     var watching by remember { mutableStateOf(false) }
                     GameButton("WATCH", Modifier.width(130.dp), color = BV.Mustard, dark = BV.MustardDark, height = 48.dp, textSize = 18.sp) { watching = true }
-                    if (watching) MockAdOverlay(onReward = { watching = false; val amt = 150L + d.highestUnlocked * 8L; App.repo.doubleReward(amt); openDialog(HomeDialog.Reward("BONUS!", amt, 0)) }, onCancel = { watching = false })
+                    if (watching) MockAdOverlay(onReward = { watching = false; val amt = com.ngstudio.burgerready.game.Restaurants.rewardUnit(d.frontier()) * 2; App.repo.doubleReward(amt); openDialog(HomeDialog.Reward("BONUS!", amt, 0)) }, onCancel = { watching = false })
                 }
             }
             item { Text("Chests", style = Type.Heading.copy(color = BV.Cocoa)) }
@@ -129,7 +138,7 @@ fun ShopTab(openDialog: (HomeDialog) -> Unit) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     listOf(20 to 1L, 60 to 4L, 150 to 12L).forEach { (gems, k) ->
-                        val amount = (500 + d.highestUnlocked * 40L) * k
+                        val amount = com.ngstudio.burgerready.game.Restaurants.rewardUnit(d.frontier()) * 5 * k
                         ItemCard(Modifier.weight(1f), onClick = {}) {
                             Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { BucksIcon(52.dp) }
                             Text(formatNum(amount), style = Type.Heading.copy(fontSize = 17.sp))
@@ -186,15 +195,21 @@ fun KitchenTab() {
                 val cost = u.cost(lvl)
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(BV.Cocoa).padding(3.dp).clip(RoundedCornerShape(16.dp)).background(BV.Cream).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).background(BV.Mustard.copy(alpha = 0.4f)), contentAlignment = Alignment.Center) {
-                        ArtImage("upgrade_${u.id}", Modifier.fillMaxSize()) { Text(u.icon, fontSize = 30.sp) }
+                    Box {
+                        Box(Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).background(BV.Mustard.copy(alpha = 0.4f)), contentAlignment = Alignment.Center) {
+                            ArtImage("upgrade_${u.id}", Modifier.fillMaxSize()) { Text(u.icon, fontSize = 30.sp) }
+                        }
+                        // on the icon, so the name keeps its full width
+                        if (u == hot) Box(Modifier.align(Alignment.TopStart).offset(x = (-4).dp, y = (-5).dp).graphicsLayer { rotationZ = -10f }
+                            .clip(RoundedCornerShape(6.dp)).background(BV.Cocoa).padding(1.5.dp).clip(RoundedCornerShape(5.dp)).background(BV.Tomato).padding(horizontal = 5.dp)) {
+                            Text("HOT", style = Type.Number.copy(fontSize = 11.sp))
+                        }
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(u.label, style = Type.Heading.copy(fontSize = 17.sp))
-                            if (u == hot) { Spacer(Modifier.width(6.dp)); Box(Modifier.clip(RoundedCornerShape(6.dp)).background(BV.Tomato).padding(horizontal = 5.dp)) { Text("HOT", style = Type.Number.copy(fontSize = 11.sp)) } }
-                        }
+                        // one line: "Customer Patience" used to wrap and make its card taller than the rest
+                        Text(u.label, style = Type.Heading.copy(fontSize = if (u.label.length > 15) 15.sp else 17.sp), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         Text(u.desc, style = Type.Small)
                         ProgressBar3D(lvl.toFloat() / u.maxLevel, Modifier.fillMaxWidth().padding(top = 4.dp), height = 12.dp, color = BV.Teal)
                         Text("Lv $lvl / ${u.maxLevel}", style = Type.Small)
@@ -219,21 +234,21 @@ private fun StatCell(label: String, value: String) {
     }
 }
 
-// =============================================================================================== STORES
+// =============================================================================================== WORLD (restaurants)
 @Composable
 fun StoresTab(openDialog: (HomeDialog) -> Unit) {
     val d = App.repo.state.value
     TabBackground(Color(0xFFC9F0C0), Color(0xFFE6F6FF)) {
         LazyVerticalGrid(GridCells.Fixed(2), Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 82.dp, start = 12.dp, end = 12.dp, bottom = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item(span = { GridItemSpan(2) }) { Ribbon("WORLD STORES", Modifier.fillMaxWidth(), color = BV.Mint, dark = BV.MintDark) }
+            item(span = { GridItemSpan(2) }) { Ribbon("MY RESTAURANTS", Modifier.fillMaxWidth(), color = BV.Mint, dark = BV.MintDark) }
             item(span = { GridItemSpan(2) }) {
                 val pending = App.repo.totalPendingIncome()
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.9f)).border(2.dp, BV.Cocoa, RoundedCornerShape(16.dp)).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Passive income", style = Type.Heading.copy(fontSize = 17.sp))
-                        Text("${formatNum(d.stores.keys.sumOf { App.repo.incomeRate(it) }.toLong())} Bucks / hour", style = Type.Small)
+                        Text("Idle income", style = Type.Heading.copy(fontSize = 17.sp))
+                        Text("${formatNum(d.stores.keys.sumOf { App.repo.incomeRate(it) }.toLong())} Bucks/hour · up to ${Stores.INCOME_CAP_HOURS.toInt()}\u00A0h", style = Type.Small)
                     }
                     GameButton("COLLECT ${formatNum(pending)}", Modifier.width(160.dp), enabled = pending > 0, height = 46.dp, textSize = 15.sp, sound = "coin_cascade") {
                         val amt = App.repo.collectIncome(); if (amt > 0) openDialog(HomeDialog.Reward("INCOME!", amt, 0))
@@ -243,59 +258,94 @@ fun StoresTab(openDialog: (HomeDialog) -> Unit) {
             items(Stores.ALL) { s ->
                 val owned = s.id in d.stores
                 val selected = d.selectedStore == s.id
-                val nextUnlock = Stores.ALL.firstOrNull { it.id !in d.stores }
+                val cfg = Restaurants.config(s.id)
+                val prog = d.progressOf(s.id)
                 ItemCard(selected = selected, locked = !owned, onClick = { openDialog(HomeDialog.StoreDetail(s.id)) }) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(1.25f).clip(RoundedCornerShape(12.dp)).background(Brush.verticalGradient(listOf(Color(s.sky.toLong() or 0xFF000000), Color(s.accent.toLong() or 0xFF000000)))),
+                    Box(Modifier.fillMaxWidth().aspectRatio(1.25f).clip(RoundedCornerShape(12.dp)).background(
+                        if (owned) Brush.verticalGradient(listOf(Color(s.sky.toLong() or 0xFF000000), Color(s.accent.toLong() or 0xFF000000)))
+                        else Brush.verticalGradient(listOf(Color(0xFFE4DDD4), Color(0xFFC9BFB4)))),
                         contentAlignment = Alignment.Center) {
-                        ArtImage("store_${s.id}", Modifier.fillMaxSize()) { GameIcon(GIcon.STORE, 64.dp, tint = Color(s.wall.toLong() or 0xFF000000)) }
-                        if (!owned) Box(Modifier.fillMaxSize().background(Color(0x66000000)), contentAlignment = Alignment.Center) { GameIcon(GIcon.LOCK, 40.dp) }
+                        ArtImage("store_${s.id}", Modifier.fillMaxSize(), colorFilter = if (owned) null else com.ngstudio.burgerready.ui.kit.LockedFilter) { GameIcon(GIcon.STORE, 64.dp, tint = Color(s.wall.toLong() or 0xFF000000)) }
+                        if (!owned) Box(Modifier.fillMaxSize().background(Color(0x26FFFFFF)), contentAlignment = Alignment.Center) { GameIcon(GIcon.LOCK, 40.dp) }
                         if (selected) Box(Modifier.align(Alignment.TopStart).padding(4.dp).clip(RoundedCornerShape(6.dp)).background(BV.Mint).padding(horizontal = 6.dp)) { Text("PLAYING", style = Type.Number.copy(fontSize = 11.sp)) }
                     }
                     Text(s.name, style = Type.Heading.copy(fontSize = 15.sp), maxLines = 1)
                     Text(s.perk, style = Type.Small.copy(fontSize = 11.sp), maxLines = 1)
-                    if (owned) Row { for (k in 1..Stores.MAX_RENOVATION) StarIcon(14.dp, filled = k <= (d.stores[s.id] ?: 0)) }
-                    else PriceTag(s.cost, 0, d.bucks >= s.cost)
-                    if (!owned && s == nextUnlock && d.bucks >= s.cost) Box(Modifier.pulse()) { Text("READY TO OPEN!", style = Type.Small.copy(color = BV.MintDark)) }
+                    if (owned) {
+                        ProgressBar3D(prog.fraction(cfg), Modifier.fillMaxWidth().padding(vertical = 2.dp), height = 10.dp, color = if (prog.expanded(cfg)) BV.Mint else BV.Mustard)
+                        Row { for (k in 1..Stores.MAX_RENOVATION) StarIcon(14.dp, filled = k <= (d.stores[s.id] ?: 0)) }
+                    } else Text("Restaurant ${cfg.index + 1}", style = Type.Small.copy(color = BV.CocoaSoft))
                 }
+            }
+            // ---- World Tour: one row per region with open restaurants (500 cards would not scroll well)
+            if (App.repo.worldTourOpen()) {
+                item(span = { GridItemSpan(2) }) { Ribbon("WORLD TOUR", Modifier.fillMaxWidth().padding(top = 6.dp), color = BV.Teal, dark = BV.TealDark, size = 20.sp) }
+                items(Tour.REGIONS.size, span = { GridItemSpan(2) }) { r -> RegionIncomeRow(d, r + 1) { id -> openDialog(HomeDialog.StoreDetail(id)) } }
             }
         }
     }
 }
 
 @Composable
-fun StoreDetailCard(id: String, onClose: () -> Unit) {
+fun StoreDetailCard(id: String, onClose: () -> Unit, onPlay: () -> Unit) {
     val s = Stores.byId(id)
     val d = App.repo.state.value
     val owned = id in d.stores
     val stars = d.stores[id] ?: 0
+    val cfg = Restaurants.config(id)
+    val prog = d.progressOf(id)
     var confetti by remember { mutableIntStateOf(0) }
     Box {
         DialogCard(s.name.uppercase(), onClose, color = BV.Mint, dark = BV.MintDark) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().aspectRatio(1.5f).clip(RoundedCornerShape(16.dp)).background(Brush.verticalGradient(listOf(Color(s.sky.toLong() or 0xFF000000), Color(s.accent.toLong() or 0xFF000000)))),
                     contentAlignment = Alignment.Center) {
-                    ArtImage("store_${s.id}", Modifier.fillMaxSize().bob(4f)) { GameIcon(GIcon.STORE, 90.dp, tint = Color(s.wall.toLong() or 0xFF000000)) }
+                    if (s.isTour) ArtImage(s.art, Modifier.fillMaxSize().bob(4f)) { RegionBadge(s, 130.dp) }
+                    else ArtImage("store_${s.id}", Modifier.fillMaxSize().bob(4f)) { GameIcon(GIcon.STORE, 90.dp, tint = Color(s.wall.toLong() or 0xFF000000)) }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text("Perk: ${s.perk}", style = Type.Body)
-                Text("Income: ${formatNum(Stores.incomePerHour(s))} / hour", style = Type.Small)
+                Text("Menu: " + cfg.menu.joinToString { it.label }, style = Type.Small.copy(textAlign = TextAlign.Center))
                 Spacer(Modifier.height(10.dp))
                 if (!owned) {
-                    GameButton("OPEN · ${formatNum(s.cost)}", Modifier.fillMaxWidth(), enabled = d.bucks >= s.cost, icon = { BucksIcon(22.dp) }, sound = "ui_purchase") {
-                        if (App.repo.openStore(id)) { confetti++; App.haptic(3) }
-                    }
+                    Text("Restaurant ${cfg.index + 1}. Buy the NEW RESTAURANT pad in ${Restaurants.storeAt(d.frontier()).name} to open it.",
+                        style = Type.Body.copy(textAlign = TextAlign.Center))
                 } else {
-                    Row { for (k in 1..Stores.MAX_RENOVATION) StarIcon(26.dp, filled = k <= stars) }
+                    Box(Modifier.fillMaxWidth()) {
+                        ProgressBar3D(prog.fraction(cfg), Modifier.fillMaxWidth(), height = 22.dp, color = if (prog.expanded(cfg)) BV.Mint else BV.Mustard)
+                        Text("Built ${prog.builtCount(cfg)} / ${cfg.buildPads}", style = Type.Number.copy(fontSize = 13.sp, color = BV.Cocoa), modifier = Modifier.align(Alignment.Center))
+                    }
+                    Text("Idle income: ${formatNum(App.repo.incomeRate(id).toLong())} / hour", style = Type.Small)
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Renovation  ", style = Type.Small)
+                        for (k in 1..Stores.MAX_RENOVATION) StarIcon(22.dp, filled = k <= stars)
+                    }
+                    if (prog.expanded(cfg) && !s.isTour) {
+                        // the Golden Tour: three one-visit challenges per finished restaurant (game/GoldStars.kt)
+                        val mask = d.goldOf(id)
+                        Spacer(Modifier.height(6.dp))
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFF4CC)).border(2.dp, BV.Gold, RoundedCornerShape(12.dp)).padding(8.dp)) {
+                            Text("GOLD STARS  ${com.ngstudio.burgerready.game.GoldStars.count(mask)} / 3", style = Type.Heading.copy(fontSize = 15.sp))
+                            com.ngstudio.burgerready.game.GoldStars.goals(cfg.index).forEach { g ->
+                                val got = ((mask shr g.star) and 1) == 1
+                                Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    StarIcon(16.dp, filled = got, color = if (got) BV.Gold else Color(0xFFD9CFC4))
+                                    Text("  " + goldGoalText(g), style = Type.Body.copy(fontSize = 13.sp, color = if (got) BV.MintDark else BV.Cocoa))
+                                }
+                            }
+                            Text("Each star: +${com.ngstudio.burgerready.game.GoldStars.GEMS} gems and +5% idle income here.", style = Type.Small.copy(fontSize = 11.sp))
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
-                    if (d.selectedStore != id) GameButton("PLAY HERE", Modifier.fillMaxWidth(), color = BV.Teal, dark = BV.TealDark) { App.repo.selectStore(id) }
-                    else Text("You are playing at this store", style = Type.Small.copy(color = BV.MintDark))
+                    GameButton(if (d.selectedStore == id) "PLAY" else "PLAY HERE", Modifier.fillMaxWidth(), color = BV.Tomato, dark = BV.TomatoDark) { App.repo.selectStore(id); onPlay() }
                     Spacer(Modifier.height(8.dp))
                     if (stars < Stores.MAX_RENOVATION) {
                         val cost = Stores.renovationCost(s, stars)
                         GameButton("RENOVATE · ${formatNum(cost)}", Modifier.fillMaxWidth(), enabled = d.bucks >= cost, color = BV.Mustard, dark = BV.MustardDark, height = 50.dp, textSize = 18.sp, sound = "upgrade") {
                             if (App.repo.renovate(id)) confetti++
                         }
-                        Text("+10% income per star", style = Type.Small)
+                        Text("+10% idle income per star", style = Type.Small)
                     }
                 }
             }

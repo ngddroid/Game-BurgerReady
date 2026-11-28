@@ -80,7 +80,7 @@ fun SplashScreen(onDone: () -> Unit) {
     val logo = remember { Animatable(0f) }
     val progress = remember { Animatable(0f) }
     var confetti by remember { mutableIntStateOf(0) }
-    val tips = listOf("Serve fast to build combos!", "VIP guests pay triple!", "Hire helpers to run the kitchen.", "Open Stores for passive income.", "Clean tables so guests can sit.")
+    val tips = listOf("Serve fast to build combos!", "VIP guests pay triple!", "Hire helpers to run the kitchen.", "Finished restaurants earn while you're away.", "Clean tables so guests can sit.")
     val tip = remember { tips.random() }
     LaunchedEffect(Unit) {
         App.audio.playMusic("menu_theme")
@@ -120,15 +120,21 @@ private data class OnboardPage(val title: String, val body: String, val art: Str
 
 /** Four illustrated pages with a big Next button. There is intentionally NO skip button. */
 @Composable
-fun OnboardingScreen(onFinish: () -> Unit) {
+fun OnboardingScreen(onFinish: () -> Unit, onLeave: (() -> Unit)? = null) {
     val pages = listOf(
-        OnboardPage("Welcome to\nBun Voyage!", "Meet Chef Patty — a corgi with a big dream: the tastiest burgers on the planet.", "onboard_1", Color(0xFFFFD86B), Color(0xFFFF9A3C)),
+        OnboardPage("Welcome to\nBun Voyage!", "Meet Chef Patty, a corgi with an old food wagon and a big promise to keep.", "onboard_1", Color(0xFFFFD86B), Color(0xFFFF9A3C)),
         OnboardPage("Grill, Stack\n& Serve", "Grab burgers from the grill, stack them high and serve hungry guests before they lose patience!", "onboard_2", Color(0xFF8FE3D0), Color(0xFF1FA6B8)),
-        OnboardPage("Build Your\nDream Diner", "Spend your cash on new stations, tables and helpers. 10,000 shifts are waiting!", "onboard_3", Color(0xFFFFB4C8), Color(0xFFF2542D)),
-        OnboardPage("Travel the\nWorld", "Open Stores from the beach to outer space, earn while you're away, and unlock skins, pets and themes.", "onboard_4", Color(0xFFC9B8FF), Color(0xFF3D8BFF)),
+        OnboardPage("Build Your\nDream Diner", "Spend your cash on new stations, tables and helpers. Everything you build stays yours!", "onboard_3", Color(0xFFFFB4C8), Color(0xFFF2542D)),
+        OnboardPage("Fill the\nVoyage Book", "Twelve restaurants, from the beach to outer space. Finish one to open the next. They all earn while you're away!", "onboard_4", Color(0xFFC9B8FF), Color(0xFF3D8BFF)),
     )
     val pager = rememberPagerState { pages.size }
     val scope = rememberCoroutineScope()
+    // Back steps to the previous page (it used to close the app from any page); still no skip
+    androidx.activity.compose.BackHandler(enabled = pager.currentPage > 0) {
+        App.sfx("ui_back"); scope.launch { pager.animateScrollToPage(pager.currentPage - 1) }
+    }
+    // a replay from Settings → How to Play goes back Home from the first page instead of closing the app
+    androidx.activity.compose.BackHandler(enabled = pager.currentPage == 0 && onLeave != null) { App.sfx("ui_back"); onLeave?.invoke() }
     LaunchedEffect(pager.currentPage) { App.sfx("whoosh", 0.6f) }
     Box(Modifier.fillMaxSize()) {
         val page = pages[pager.currentPage]

@@ -351,6 +351,23 @@ def build_coin():
     return item(parts, 0.035)
 
 
+def build_cash():
+    """A banded brick of green bills: what guests leave at the register (stacked by WorldView)."""
+    bill = M("#4CB86A")
+    face = M("#8EDB9C")
+    deep = M("#2F8A4E")
+    band = M("mustard")
+    objs = [rbox((0.220, 0.110, 0.040), m=bill, r=0.006, segs=1, z0=0.0, name="stack"),
+            rbox((0.206, 0.098, 0.004), m=face, r=0.002, segs=1, z0=0.0395, name="top_bill")]
+    # printed ovals on the top bill, either side of the band
+    for x in (-0.068, 0.068):
+        objs.append(rcyl(0.021, 0.003, loc=(x, 0.0, 0.0), m=deep, verts=12, bevel=0.0, z0=0.043, name="oval"))
+    # paper band around the middle, with a little bun stamp
+    objs.append(rbox((0.046, 0.114, 0.046), m=band, r=0.004, segs=1, z0=-0.002, name="band"))
+    objs.append(rcyl(0.012, 0.003, loc=(0.0, 0.0, 0.0), m=M("tomato"), verts=10, bevel=0.0, z0=0.044, name="stamp"))
+    return item(objs, 0.047)
+
+
 def build_gem():
     n = 8
     girdle_lo = [(0.070 * math.cos(TAU * j / n), 0.070 * math.sin(TAU * j / n), 0.072) for j in range(n)]
@@ -398,6 +415,7 @@ MODELS = {
     "food_bag": (build_bag, 700, FOOD_AO),
     "food_coin": (build_coin, 700, {"ao": 0.05}),
     "food_gem": (build_gem, 700, {"ao": 0.05}),
+    "food_cash": (build_cash, 400, {"ao": 0.05}),
     "food_patty_raw": (build_patty_raw, 700, FOOD_AO),
 }
 

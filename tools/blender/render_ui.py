@@ -7,11 +7,12 @@ Outputs (exact names, the app loads them by name)
     app/src/main/assets/ui/pet_<id>.png           512x512 RGBA  pets + pet_none
     app/src/main/assets/ui/onboard_1..4.png       1024x1024 RGBA vignettes
     app/src/main/assets/ui/card_guest_<sp>.png    256x256 RGBA  head portraits
+    app/src/main/assets/ui/cast_<id>.png          512x512 RGBA  story cast busts (game/Story.kt Speaker)
     tools/icon/icon_full.png                      1024x1024 opaque app icon
     tools/icon/icon_fg.png / icon_bg.png          1024x1024 adaptive-icon layers
     tools/icon/feature_graphic.png                1024x500 opaque Play feature graphic
 
-Run (all groups, or name some: skins pets cards onboard icon)
+Run (all groups, or name some: skins pets cards cast onboard icon)
     ~/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
         --python tools/blender/render_ui.py -- [group ...] [--fast]
 
@@ -74,6 +75,13 @@ SKINS = [  # id, species, hat, apron (shirt tint)
     ("quackers", "duck", "flower", "#FF9A3C"),
     ("bandit", "raccoon", "crown", "#2C3E66"),
     ("astro", "corgi", "helmet", "#E8F4FF"),
+]
+CAST = [  # id, species, hat, apron (shirt tint), hat tint: the story's recurring characters (docs/STORY_SCRIPT.md)
+    ("hazel", "bear", "toque", "#8B5A3C", "#FFFFFF"),        # mentor: retired wagon cook
+    ("fenna", "fox", "cap", "#2C3E66", "#3D5BA8"),           # rival: Fast Lane Burgers
+    ("dot", "duck", "beanie", "#FFC23C", "#1FA6B8"),         # the regular
+    ("scraps", "raccoon", "bandana", "#5B4A70", "#E94B3C"),  # the thief turned dishwasher
+    ("clementine", "cat", "beret", "#FFFFFF", "#9B5CC8"),    # the food critic
 ]
 # Render-only hat lifts where a brim would cover the eyes (frog eye bumps sit on the crown).
 HAT_LIFT = {("frog", "cowboy"): (0.0, 0.02, 0.075, -10.0)}   # dx, dy, dz, tilt back (deg)
@@ -587,6 +595,18 @@ def render_skin(sid, sp, hat, apron):
     save_png(os.path.join(UI_DIR, "skin_%s.png" % sid), render_rgba("skin_" + sid))
 
 
+def render_cast(cid, sp, hat, apron, hat_tint):
+    """Same framing as the chef-skin busts, so cast and skins sit together in the speech cards."""
+    new_scene()
+    setup((512, 512), samples=96)
+    ch = Char(sp, hat=hat, apron=apron, hat_tint=hat_tint, pose=BUST_POSE)
+    smoothen(ch.objs())
+    lights(target=(0, 0, 0.9))
+    camera_fit(ch.objs(), (0.40, -1.0, -0.16), lens=70, margins=(0.08, 0.08, 0.0, 0.04), z_cut=0.55,
+               anchor_bottom=True)
+    save_png(os.path.join(UI_DIR, "cast_%s.png" % cid), render_rgba("cast_" + cid))
+
+
 # ---------------------------------------------------------------------------
 # 2. Pets
 # ---------------------------------------------------------------------------
@@ -1027,13 +1047,17 @@ def main():
     global FAST
     args = B.script_args()
     FAST = "--fast" in args
-    groups = [a for a in args if not a.startswith("--")] or ["skins", "pets", "cards", "onboard", "icon"]
+    groups = [a for a in args if not a.startswith("--")] or ["skins", "pets", "cards", "cast", "onboard", "icon"]
     only = [a.split("=", 1)[1] for a in args if a.startswith("--only=")]
     os.makedirs(UI_DIR, exist_ok=True)
     if "skins" in groups:
         for sid, sp, hat, apron in SKINS:
             if not only or sid in only:
                 render_skin(sid, sp, hat, apron)
+    if "cast" in groups:
+        for cid, sp, hat, apron, hat_tint in CAST:
+            if not only or cid in only:
+                render_cast(cid, sp, hat, apron, hat_tint)
     if "pets" in groups:
         for n in PT.PETS:
             if not only or n in only:

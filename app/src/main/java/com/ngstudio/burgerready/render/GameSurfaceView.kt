@@ -19,8 +19,14 @@ import kotlin.math.min
 class GameSurfaceView(context: Context, quality: Quality) : GLSurfaceView(context) {
     val game = GameRenderer(context.applicationContext, quality)
 
-    class Joystick { @Volatile var active = false; @Volatile var ox = 0f; @Volatile var oy = 0f; @Volatile var kx = 0f; @Volatile var ky = 0f }
+    class Joystick {
+        @Volatile var active = false; @Volatile var ox = 0f; @Volatile var oy = 0f; @Volatile var kx = 0f; @Volatile var ky = 0f
+        /** Bumped on every touch change (UI thread); the Compose ring redraws only when this changes. */
+        val version = androidx.compose.runtime.mutableIntStateOf(0)
+    }
     val joystick = Joystick()
+    /** True once the first restaurant frame is on screen (UI thread state for the entry curtain). */
+    val firstFrame = androidx.compose.runtime.mutableStateOf(false)
     private val radius = resources.displayMetrics.density * 56f
     private var pointerId = -1
 
@@ -28,6 +34,7 @@ class GameSurfaceView(context: Context, quality: Quality) : GLSurfaceView(contex
         setEGLContextClientVersion(3)
         setEGLConfigChooser(MsaaChooser(if (quality == Quality.LOW) 0 else 4))
         preserveEGLContextOnPause = true
+        game.onFirstFrame = { post { firstFrame.value = true } }
         setRenderer(game)
         renderMode = RENDERMODE_CONTINUOUSLY
     }
@@ -63,6 +70,7 @@ class GameSurfaceView(context: Context, quality: Quality) : GLSurfaceView(contex
                 if (s != null) { s.joyX = 0f; s.joyY = 0f }
             }
         }
+        joystick.version.intValue++
         return true
     }
 

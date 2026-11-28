@@ -1,5 +1,12 @@
 package com.ngstudio.burgerready.ui.screens
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.Canvas
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
@@ -25,8 +32,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,17 +59,19 @@ import com.ngstudio.burgerready.ui.kit.GIcon
 import com.ngstudio.burgerready.ui.kit.GameButton
 import com.ngstudio.burgerready.ui.kit.GameDialog
 import com.ngstudio.burgerready.ui.kit.GameIcon
+import com.ngstudio.burgerready.ui.kit.GemIcon
 import com.ngstudio.burgerready.ui.kit.OutlinedText
 import com.ngstudio.burgerready.ui.kit.Panel
 import com.ngstudio.burgerready.ui.kit.ProgressBar3D
 import com.ngstudio.burgerready.ui.kit.Ribbon
 import com.ngstudio.burgerready.ui.kit.RoundButton
 import com.ngstudio.burgerready.ui.kit.formatNum
+import com.ngstudio.burgerready.ui.kit.fadeTop
 import com.ngstudio.burgerready.ui.theme.BV
 import com.ngstudio.burgerready.ui.theme.Type
 
 @Composable
-fun ScreenFrame(title: String, onBack: () -> Unit, color: Color = BV.Teal, dark: Color = BV.TealDark, content: @Composable () -> Unit) {
+fun ScreenFrame(title: String, onBack: () -> Unit, color: Color = BV.Teal, dark: Color = BV.TealDark, fade: Boolean = true, content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFD9A0), BV.Cream)))) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -73,7 +80,8 @@ fun ScreenFrame(title: String, onBack: () -> Unit, color: Color = BV.Teal, dark:
                 Ribbon(title, Modifier.weight(1f), color = color, dark = dark, size = if (title.length > 12) 16.sp else 22.sp)
                 Spacer(Modifier.width(54.dp))
             }
-            Box(Modifier.weight(1f)) { content() }
+            // lists scroll out under the title row through a short fade instead of a hard cut
+            Box(Modifier.weight(1f).then(if (fade) Modifier.fadeTop(clear = 0.dp, fade = 18.dp) else Modifier)) { content() }
         }
     }
 }
@@ -139,11 +147,10 @@ fun SettingsScreen(onBack: () -> Unit, onLegal: (String) -> Unit, onReplayTutori
                     Text("Debug tools (debug build only)", style = Type.Heading.copy(color = BV.TomatoDark))
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        GameButton("+10 LVL", Modifier.weight(1f), color = BV.Lilac, dark = Color(0xFF8E73E0), height = 42.dp, textSize = 14.sp) { App.repo.update { it.copy(highestUnlocked = minOf(10_000, it.highestUnlocked + 10)) } }
-                        GameButton("+100 LVL", Modifier.weight(1f), color = BV.Lilac, dark = Color(0xFF8E73E0), height = 42.dp, textSize = 14.sp) { App.repo.update { it.copy(highestUnlocked = minOf(10_000, it.highestUnlocked + 100)) } }
+                        GameButton("FINISH SHOP", Modifier.weight(1.4f), color = BV.Lilac, dark = Color(0xFF8E73E0), height = 42.dp, textSize = 14.sp) { App.repo.debugCompleteRestaurant() }
                         GameButton("+50K $", Modifier.weight(1f), color = BV.Lilac, dark = Color(0xFF8E73E0), height = 42.dp, textSize = 14.sp) { App.repo.update { it.copy(bucks = it.bucks + 50_000, gems = it.gems + 200) } }
                     }
-                    Text("Unlocked up to level ${d.highestUnlocked}", style = Type.Small)
+                    Text("Playing ${com.ngstudio.burgerready.game.Stores.byId(d.selectedStore).name} · ${d.stores.size} restaurant${if (d.stores.size == 1) "" else "s"} open", style = Type.Small)
                 }
             }
             item {
@@ -159,7 +166,7 @@ fun SettingsScreen(onBack: () -> Unit, onLegal: (String) -> Unit, onReplayTutori
     if (confirmReset > 0) GameDialog({ confirmReset = 0 }) {
         DialogCard(if (confirmReset == 1) "RESET?" else "REALLY?", { confirmReset = 0 }) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (confirmReset == 1) "This erases all levels, Bucks, stores and items." else "This cannot be undone. Start over from Level 1?", style = Type.Body.copy(textAlign = TextAlign.Center))
+                Text(if (confirmReset == 1) "This erases all restaurants, Bucks and items." else "This cannot be undone. Start over from the Bun Wagon?", style = Type.Body.copy(textAlign = TextAlign.Center))
                 Spacer(Modifier.height(12.dp))
                 GameButton(if (confirmReset == 1) "YES, RESET" else "ERASE EVERYTHING", Modifier.fillMaxWidth(), color = BV.Tomato, dark = BV.TomatoDark) {
                     if (confirmReset == 1) confirmReset = 2 else { App.repo.resetProgress(); confirmReset = 0 }
@@ -171,6 +178,8 @@ fun SettingsScreen(onBack: () -> Unit, onLegal: (String) -> Unit, onReplayTutori
     }
 }
 
+private val ROMAN = arrayOf("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
+
 @Composable
 private fun SettingToggle(icon: GIcon, label: String, on: Boolean, onToggle: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -180,10 +189,26 @@ private fun SettingToggle(icon: GIcon, label: String, on: Boolean, onToggle: () 
     }
 }
 
+/** Chunky game-style volume slider (the stock Material 3 slider looked out of place: thin bar thumb, gap, stop dot). */
 @Composable
 private fun VolumeSlider(value: Float, onChange: (Float) -> Unit) {
-    Slider(value, onValueChange = onChange, modifier = Modifier.fillMaxWidth().padding(start = 40.dp),
-        colors = SliderDefaults.colors(thumbColor = BV.Tomato, activeTrackColor = BV.Mustard, inactiveTrackColor = BV.CreamDark))
+    val change by androidx.compose.runtime.rememberUpdatedState(onChange)
+    Canvas(
+        Modifier.fillMaxWidth().padding(start = 40.dp, end = 4.dp, top = 2.dp, bottom = 6.dp).height(30.dp)
+            .pointerInput(Unit) { detectTapGestures { o -> change(((o.x - 12.dp.toPx()) / (size.width - 24.dp.toPx())).coerceIn(0f, 1f)) } }
+            .pointerInput(Unit) { detectHorizontalDragGestures { c, _ -> c.consume(); change(((c.position.x - 12.dp.toPx()) / (size.width - 24.dp.toPx())).coerceIn(0f, 1f)) } },
+    ) {
+        val h = 14.dp.toPx(); val cy = size.height / 2; val r = 12.dp.toPx(); val b = 2.5f.dp.toPx()
+        drawRoundRect(BV.Cocoa, Offset(0f, cy - h / 2 - b), Size(size.width, h + 2 * b), CornerRadius(h))
+        drawRoundRect(BV.CreamDark, Offset(b, cy - h / 2), Size(size.width - 2 * b, h), CornerRadius(h / 2))
+        val kx = r + (size.width - 2 * r) * value.coerceIn(0f, 1f)
+        drawRoundRect(BV.Mustard, Offset(b, cy - h / 2), Size((kx - b).coerceAtLeast(h), h), CornerRadius(h / 2))
+        drawRoundRect(Color.White.copy(alpha = 0.35f), Offset(b + 4.dp.toPx(), cy - h / 2 + 2.dp.toPx()), Size((kx - b - 8.dp.toPx()).coerceAtLeast(0f), 3.dp.toPx()), CornerRadius(2.dp.toPx()))
+        drawCircle(BV.Cocoa, r + b, Offset(kx, cy + 1.5f.dp.toPx()))
+        drawCircle(BV.Cocoa, r + b, Offset(kx, cy))
+        drawCircle(BV.Tomato, r - 0.5f.dp.toPx(), Offset(kx, cy))
+        drawCircle(Color.White.copy(alpha = 0.45f), r * 0.32f, Offset(kx - r * 0.3f, cy - r * 0.32f))
+    }
 }
 
 /** Terms / Privacy: a new screen showing the game-themed HTML bundled in assets/legal. */
@@ -191,7 +216,7 @@ private fun VolumeSlider(value: Float, onChange: (Float) -> Unit) {
 @Composable
 fun LegalScreen(doc: String, onBack: () -> Unit) {
     val context = LocalContext.current
-    ScreenFrame(if (doc == "terms") "TERMS OF SERVICE" else "PRIVACY POLICY", onBack, color = BV.Mustard, dark = BV.MustardDark) {
+    ScreenFrame(if (doc == "terms") "TERMS OF SERVICE" else "PRIVACY POLICY", onBack, color = BV.Mustard, dark = BV.MustardDark, fade = false) {
         Box(Modifier.fillMaxSize().padding(10.dp).clip(RoundedCornerShape(20.dp)).border(3.dp, BV.Cocoa, RoundedCornerShape(20.dp))) {
             AndroidView({ ctx ->
                 WebView(ctx).apply {
@@ -281,13 +306,13 @@ fun AchievementsScreen(onBack: () -> Unit) {
                         GameIcon(GIcon.TROPHY, 40.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(t.name + if (nextTier >= 0) " ${"I".repeat(nextTier + 1).replace("IIII", "IV").replace("IIIII", "V")}" else " ★", style = Type.Heading.copy(fontSize = 17.sp))
+                            Text(t.name + if (nextTier >= 0) " " + ROMAN.getOrElse(nextTier) { "${nextTier + 1}" } else " ★", style = Type.Heading.copy(fontSize = 17.sp))
                             val goal = if (nextTier >= 0) t.tiers[nextTier] else t.tiers.last()
                             ProgressBar3D(value.toFloat() / goal, Modifier.fillMaxWidth().padding(top = 4.dp), height = 14.dp, color = BV.Mustard)
                             Text("${formatNum(minOf(value, goal))} / ${formatNum(goal)}", style = Type.Small)
                         }
                         Spacer(Modifier.width(8.dp))
-                        if (nextTier >= 0) GameButton("${Achievements.gems(nextTier)}💎", Modifier.width(84.dp), enabled = value >= t.tiers[nextTier], height = 42.dp, textSize = 16.sp, sound = "ui_reward") {
+                        if (nextTier >= 0) GameButton("${Achievements.gems(nextTier)}", Modifier.width(88.dp), enabled = value >= t.tiers[nextTier], height = 42.dp, textSize = 16.sp, sound = "ui_reward", icon = { GemIcon(18.dp) }) {
                             App.repo.claimAchievement(t, nextTier); confetti++
                         } else Text("DONE", style = Type.Heading.copy(color = BV.MintDark, fontSize = 16.sp))
                     }

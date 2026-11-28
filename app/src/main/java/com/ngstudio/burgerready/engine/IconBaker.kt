@@ -26,9 +26,9 @@ object IconBaker {
             val saveFog = renderer.lighting.fogEnd
             val L = renderer.lighting
             val saveSunC = L.sunColor.copyOf(); val saveSky = L.skyColor.copyOf(); val saveGround = L.groundColor.copyOf()
-            L.sunColor[0] = 0.85f; L.sunColor[1] = 0.8f; L.sunColor[2] = 0.72f
-            L.skyColor[0] = 0.55f; L.skyColor[1] = 0.55f; L.skyColor[2] = 0.6f
-            L.groundColor[0] = 0.35f; L.groundColor[1] = 0.3f; L.groundColor[2] = 0.3f
+            L.sunColor[0] = 1.04f; L.sunColor[1] = 1.0f; L.sunColor[2] = 0.94f
+            L.skyColor[0] = 0.70f; L.skyColor[1] = 0.66f; L.skyColor[2] = 0.84f
+            L.groundColor[0] = 1f; L.groundColor[1] = 1f; L.groundColor[2] = 1f
             renderer.lighting.fogStart = 500f; renderer.lighting.fogEnd = 600f
             for ((name, slot) in atlas.iconSlots) {
                 val model = models.getOrNull("food_$name") ?: continue

@@ -36,11 +36,13 @@ sealed class Route {
     data object Splash : Route()
     data object Onboarding : Route()
     data class Home(val tab: Int = 2) : Route()
-    data class Game(val level: Int) : Route()
+    data class Game(val store: String) : Route()
     data object Settings : Route()
     data class Legal(val doc: String) : Route()
     data object RecipeBook : Route()
     data object Achievements : Route()
+    data object VoyageBook : Route()
+    data object WorldMap : Route()
 }
 
 class Navigator {
@@ -73,22 +75,27 @@ fun AppRoot() {
                 Route.Splash -> SplashScreen {
                     if (App.repo.data.onboardingDone) nav.resetTo(Route.Home(2)) else nav.resetTo(Route.Onboarding)
                 }
-                Route.Onboarding -> OnboardingScreen {
-                    App.repo.setOnboardingDone()
-                    nav.resetTo(Route.Home(2)); nav.push(Route.Game(1))
-                }
+                Route.Onboarding -> OnboardingScreen(
+                    onFinish = {
+                        App.repo.setOnboardingDone()
+                        nav.resetTo(Route.Home(2)); nav.push(Route.Game(App.repo.data.selectedStore))
+                    },
+                    onLeave = if (App.repo.data.onboardingDone) ({ nav.resetTo(Route.Home(2)) }) else null,
+                )
                 is Route.Home -> HomeScreen(
                     initialTab = homeTab,
                     onTab = { homeTab = it },
-                    onPlay = { lvl -> nav.push(Route.Game(lvl)) },
+                    onPlay = { nav.push(Route.Game(App.repo.data.selectedStore)) },
                     onSettings = { nav.push(Route.Settings) },
                     onRecipeBook = { nav.push(Route.RecipeBook) },
                     onAchievements = { nav.push(Route.Achievements) },
+                    onVoyage = { nav.push(Route.VoyageBook) },
+                    onMap = { nav.push(Route.WorldMap) },
                 )
                 is Route.Game -> GameScreen(
-                    level = r.level,
+                    store = r.store,
                     onExit = { nav.resetTo(Route.Home(2)) },
-                    onNext = { next -> nav.replace(Route.Game(next)) },
+                    onOpen = { next -> nav.replace(Route.Game(next)) },
                 )
                 Route.Settings -> SettingsScreen(
                     onBack = { nav.back() },
@@ -98,6 +105,8 @@ fun AppRoot() {
                 is Route.Legal -> LegalScreen(r.doc) { nav.back() }
                 Route.RecipeBook -> RecipeBookScreen { nav.back() }
                 Route.Achievements -> AchievementsScreen { nav.back() }
+                Route.VoyageBook -> com.ngstudio.burgerready.ui.screens.VoyageBookScreen { nav.back() }
+                Route.WorldMap -> com.ngstudio.burgerready.ui.screens.WorldMapScreen(onBack = { nav.back() }, onPlay = { nav.resetTo(Route.Home(2)); nav.push(Route.Game(App.repo.data.selectedStore)) })
             }
         }
         if (confirmExit) {
@@ -105,7 +114,7 @@ fun AppRoot() {
             com.ngstudio.burgerready.ui.kit.GameDialog({ confirmExit = false }) {
                 com.ngstudio.burgerready.ui.screens.DialogCard("LEAVING?", { confirmExit = false }) {
                     androidx.compose.foundation.layout.Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                        androidx.compose.material3.Text("Leave the kitchen? Your Stores keep earning while you're away!",
+                        androidx.compose.material3.Text("Leave the kitchen? Your restaurants keep earning while you're away!",
                             style = com.ngstudio.burgerready.ui.theme.Type.Body.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center))
                         androidx.compose.foundation.layout.Spacer(Modifier.height(14.dp))
                         com.ngstudio.burgerready.ui.kit.GameButton("KEEP COOKING", Modifier.fillMaxWidth(), color = BV.Mint, dark = BV.MintDark) { confirmExit = false }

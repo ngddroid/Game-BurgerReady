@@ -48,7 +48,6 @@ import com.ngstudio.burgerready.BuildConfig
 import com.ngstudio.burgerready.data.ChefRank
 import com.ngstudio.burgerready.data.LoginRewards
 import com.ngstudio.burgerready.data.SpinWheel
-import com.ngstudio.burgerready.game.LevelGenerator
 import com.ngstudio.burgerready.game.Stores
 import com.ngstudio.burgerready.ui.kit.BucksIcon
 import com.ngstudio.burgerready.ui.kit.CloseButton
@@ -87,56 +86,17 @@ fun DialogCard(title: String, onClose: (() -> Unit)?, color: Color = BV.Tomato, 
 }
 
 @Composable
-fun HomeDialogs(dialog: HomeDialog, onPlay: (Int) -> Unit, onClose: () -> Unit) {
-    var current by remember(dialog) { mutableStateOf(dialog) }
-    when (val d = current) {
-        is HomeDialog.LevelInfo -> GameDialog(onClose) { LevelInfoCard(d.level, onPlay, onClose) }
-        is HomeDialog.Unlock -> UnlockLevelDialog(d.level, onClose) { current = HomeDialog.LevelInfo(d.level) }
+fun HomeDialogs(dialog: HomeDialog, onPlay: () -> Unit, onClose: () -> Unit) {
+    when (val d = dialog) {
+        HomeDialog.UnlockNext -> UnlockNextDialog(onClose, onPlay)
         HomeDialog.Login -> GameDialog(onClose) { LoginCard(onClose) }
         HomeDialog.Spin -> GameDialog(null) { SpinCard(onClose) }
         HomeDialog.Missions -> GameDialog(onClose) { MissionsCard(onClose) }
         HomeDialog.Income -> GameDialog(onClose) { IncomeCard(onClose) }
+        HomeDialog.WelcomeBack -> GameDialog(onClose) { WelcomeBackCard(onClose) }
         HomeDialog.Rank -> GameDialog(onClose) { RankCard(onClose) }
         is HomeDialog.Reward -> RewardPopup(d.title, d.bucks, d.gems, onClose)
-        is HomeDialog.StoreDetail -> GameDialog(onClose) { StoreDetailCard(d.id, onClose) }
-    }
-}
-
-// --------------------------------------------------------------------------------------------- level info
-@Composable
-fun LevelInfoCard(level: Int, onPlay: (Int) -> Unit, onClose: () -> Unit) {
-    val cfg = remember(level) { LevelGenerator.generate(level) }
-    val stars = App.repo.data.starsOf(level)
-    DialogCard("LEVEL $level", onClose, color = if (cfg.isBoss) BV.Tomato else BV.Teal, dark = if (cfg.isBoss) BV.TomatoDark else BV.TealDark) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Text(cfg.title, style = Type.Title)
-            Row(Modifier.padding(vertical = 6.dp)) { for (k in 1..3) StarIcon(34.dp, filled = k <= stars) }
-            cfg.boss?.let { b ->
-                Box(Modifier.clip(RoundedCornerShape(12.dp)).background(BV.Tomato.copy(alpha = 0.15f)).padding(10.dp)) {
-                    Text("👑 BOSS: ${b.blurb}", style = Type.Body.copy(textAlign = TextAlign.Center))
-                }
-                Spacer(Modifier.height(6.dp))
-            }
-            if (cfg.mutators.isNotEmpty()) {
-                Text("Wild Shift", style = Type.Heading.copy(fontSize = 16.sp, color = BV.TomatoDark))
-                cfg.mutators.forEach { Text("• ${it.label}: ${it.blurb}", style = Type.Small) }
-                Spacer(Modifier.height(6.dp))
-            }
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White).border(2.dp, BV.CreamDark, RoundedCornerShape(14.dp)).padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly) {
-                InfoCell("Goal", "$" + formatNum(cfg.target.toLong()))
-                InfoCell("Time", "${cfg.shiftSeconds.toInt() / 60}:${"%02d".format(cfg.shiftSeconds.toInt() % 60)}")
-                InfoCell("Menu", cfg.menu.size.toString())
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Reward up to ", style = Type.Body); BucksIcon(20.dp)
-                Text(" " + formatNum((LevelGenerator.reward(level) * 1.6f).toLong()), style = Type.Body)
-            }
-            if (cfg.tutorial > 0) Text("Training shift — you can't lose this one!", style = Type.Small.copy(color = BV.MintDark))
-            Spacer(Modifier.height(14.dp))
-            GameButton("PLAY!", Modifier.fillMaxWidth().pulse(0.97f, 1.03f), color = BV.Mint, dark = BV.MintDark, height = 60.dp, textSize = 26.sp) { onPlay(level) }
-        }
+        is HomeDialog.StoreDetail -> GameDialog(onClose) { StoreDetailCard(d.id, onClose, onPlay) }
     }
 }
 
@@ -149,13 +109,14 @@ private fun InfoCell(label: String, value: String) {
 }
 
 // --------------------------------------------------------------------------------------------- unlock (debug ads)
-/** Debug builds only: offer a mock rewarded ad that unlocks the tapped level. */
+/** Debug builds only: offer a mock rewarded ad that opens the next restaurant early. */
 @Composable
-fun UnlockLevelDialog(level: Int, onClose: () -> Unit, onUnlocked: () -> Unit) {
+fun UnlockNextDialog(onClose: () -> Unit, onPlay: () -> Unit) {
     var watching by remember { mutableStateOf(false) }
     if (!BuildConfig.DEBUG_AD_UNLOCK) { onClose(); return }
+    val next = com.ngstudio.burgerready.game.Restaurants.storeAt(App.repo.data.frontier() + 1)
     if (watching) {
-        MockAdOverlay(onReward = { App.repo.adUnlock(level); App.sfx("ui_level_unlock"); onUnlocked() }, onCancel = { watching = false })
+        MockAdOverlay(onReward = { App.repo.adUnlockNext(); App.sfx("ui_level_unlock"); onPlay() }, onCancel = { watching = false })
         return
     }
     GameDialog(onClose) {
@@ -163,8 +124,8 @@ fun UnlockLevelDialog(level: Int, onClose: () -> Unit, onUnlocked: () -> Unit) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 GameIcon(GIcon.LOCK, 72.dp)
                 Spacer(Modifier.height(8.dp))
-                Text("Level $level is locked", style = Type.Title.copy(fontSize = 22.sp))
-                Text("Watch a short ad to unlock it now!", style = Type.Body.copy(textAlign = TextAlign.Center))
+                Text(next.name, style = Type.Title.copy(fontSize = 22.sp))
+                Text("Buy the NEW RESTAURANT pad to open it, or watch a short ad to open it now.", style = Type.Body.copy(textAlign = TextAlign.Center))
                 Spacer(Modifier.height(4.dp))
                 Text("DEBUG BUILD · mock ad", style = Type.Small.copy(color = BV.TomatoDark))
                 Spacer(Modifier.height(16.dp))
@@ -175,6 +136,7 @@ fun UnlockLevelDialog(level: Int, onClose: () -> Unit, onUnlocked: () -> Unit) {
         }
     }
 }
+
 
 /** Placeholder "rewarded ad" shown in debug builds (replace with a real ad SDK later). */
 @Composable
@@ -227,7 +189,7 @@ fun LoginCard(onClose: () -> Unit) {
                                 Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
                                     if (r.chest) GameIcon(GIcon.CHEST, 34.dp) else if (r.bucks > 0) BucksIcon(30.dp) else GemIcon(28.dp)
                                 }
-                                Text(if (r.bucks > 0) formatNum(r.bucks) else "${r.gems}", style = Type.Heading.copy(fontSize = 15.sp))
+                                Text(if (r.bucks > 0) formatNum(App.repo.loginBucks(k)) else "${r.gems}", style = Type.Heading.copy(fontSize = 15.sp), maxLines = 1)
                                 if (r.bucks > 0 && r.gems > 0) Text("+${r.gems} gems", style = Type.Small.copy(fontSize = 10.sp, color = BV.TealDark))
                                 if (done) Text("✓", style = Type.Heading.copy(color = BV.MintDark, fontSize = 14.sp))
                             }
@@ -257,6 +219,7 @@ fun SpinCard(onClose: () -> Unit) {
     var watching by remember { mutableStateOf(false) }
     var confetti by remember { mutableIntStateOf(0) }
     val segs = SpinWheel.SEGMENTS
+    androidx.activity.compose.BackHandler(enabled = spinning) { } // finish the spin before the dialog can close
     if (watching) { MockAdOverlay(onReward = { App.repo.grantExtraSpin(); watching = false }, onCancel = { watching = false }); return }
     Box {
         DialogCard("LUCKY SPIN", if (spinning) null else onClose, color = BV.Lilac, dark = Color(0xFF8E73E0)) {
@@ -278,13 +241,13 @@ fun SpinCard(onClose: () -> Unit) {
                             drawCircle(if (k % 2 == 0) Color.White else BV.Gold, 4.dp.toPx(), Offset(center.x + cos(a) * r * 0.965f, center.y + sin(a) * r * 0.965f))
                         }
                     }
-                    // labels
+                    // labels: centred at 72 dp, inside the band the pointer covers (they used to sit under it at 95 dp)
                     for ((i, s) in segs.withIndex()) {
                         val ang = (i * 360f / segs.size + rot.value) * PI.toFloat() / 180f
-                        Box(Modifier.offset(x = (sin(ang) * 95).dp, y = (-cos(ang) * 95).dp).rotate(i * 360f / segs.size + rot.value), contentAlignment = Alignment.Center) {
+                        Box(Modifier.offset(x = (sin(ang) * 72).dp, y = (-cos(ang) * 72).dp).rotate(i * 360f / segs.size + rot.value), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 if (s.label == "CHEST") GameIcon(GIcon.CHEST, 26.dp) else if (s.gems > 0) GemIcon(22.dp) else BucksIcon(22.dp)
-                                OutlinedText(if (s.label == "CHEST") "" else s.label, size = 14.sp, stroke = 1.2.dp)
+                                OutlinedText(if (s.label == "CHEST") "" else spinLabel(s), size = if (spinLabel(s).length > 4) 12.sp else 14.sp, stroke = 1.2.dp, maxLines = 1)
                             }
                         }
                     }
@@ -296,7 +259,7 @@ fun SpinCard(onClose: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                result?.let { i -> Text("You won ${if (segs[i].label == "CHEST") "a Chest!" else segs[i].label + if (segs[i].gems > 0) " gems!" else " Bucks!"}", style = Type.Heading) }
+                result?.let { i -> Text("You won ${if (segs[i].label == "CHEST") "a chest!" else spinLabel(segs[i]) + if (segs[i].gems > 0) " gems!" else " Bucks!"}", style = Type.Heading) }
                 Spacer(Modifier.height(8.dp))
                 val can = App.repo.canSpin()
                 if (can) {
@@ -324,6 +287,88 @@ fun SpinCard(onClose: () -> Unit) {
     }
 }
 
+/** What a wheel segment shows: gems as they are, Bucks scaled to the newest restaurant (what [GameRepo.spin] pays). */
+private fun spinLabel(s: SpinWheel.Segment): String = if (s.gems > 0) "${s.gems}" else formatNum(App.repo.scaledBucks(s.bucks))
+
+// --------------------------------------------------------------------------------------------- welcome back
+/**
+ * A returning player with idle income and today's calendar reward gets one card with one button, instead of the
+ * income popup followed by the daily calendar (round 3 stacked prologue → income → daily). Closing it loses
+ * nothing: the income keeps waiting on the INCOME pill and the day on the Daily button.
+ */
+@Composable
+fun WelcomeBackCard(onClose: () -> Unit) {
+    val d = App.repo.state.value
+    val canLogin = App.repo.canClaimLogin()
+    val pending = App.repo.totalPendingIncome()
+    var got by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var confetti by remember { mutableIntStateOf(0) }
+    LaunchedEffect(got) { if (got != null) { delay(1600); onClose() } }
+    Box {
+        DialogCard("WELCOME BACK!", onClose, color = BV.Teal, dark = BV.TealDark) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                val open = d.stores.size
+                WelcomeRow(GIcon.STORE, "While you were away", if (open == 1) "Your restaurant kept cooking" else "Your $open restaurants kept cooking", BV.Pink.copy(alpha = 0.22f)) {
+                    if (got != null) Text("✓ Collected", style = Type.Heading.copy(fontSize = 16.sp, color = BV.MintDark), maxLines = 1)
+                    else { BucksIcon(24.dp); Text(" " + formatNum(pending), style = Type.Heading.copy(fontSize = 19.sp), maxLines = 1) }
+                }
+                if (canLogin || got != null) {
+                    Spacer(Modifier.height(8.dp))
+                    val idx = (if (got != null) d.loginStreak + 6 else d.loginStreak) % 7
+                    val r = LoginRewards.DAYS[idx]
+                    WelcomeRow(if (r.chest) GIcon.CHEST else GIcon.CALENDAR, "Daily reward · Day ${idx + 1}", null, BV.Mustard.copy(alpha = 0.25f), streak = idx) {
+                        if (got != null) Text("✓ Claimed", style = Type.Heading.copy(fontSize = 16.sp, color = BV.MintDark), maxLines = 1)
+                        else {
+                            if (r.bucks > 0) { BucksIcon(22.dp); Text(" " + formatNum(App.repo.loginBucks(idx)), style = Type.Heading.copy(fontSize = 17.sp), maxLines = 1) }
+                            if (r.gems > 0) { Spacer(Modifier.width(4.dp)); GemIcon(20.dp); Text(" ${r.gems}", style = Type.Heading.copy(fontSize = 17.sp), maxLines = 1) }
+                            if (r.chest) { Spacer(Modifier.width(4.dp)); GameIcon(GIcon.CHEST, 22.dp) }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                val g = got
+                if (g != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (g.first > 0) { BucksIcon(30.dp); OutlinedText(" +${formatNum(g.first)}  ", size = 24.sp, color = BV.Mint) }
+                        if (g.second > 0) { GemIcon(28.dp); OutlinedText(" +${g.second}", size = 24.sp, color = BV.Gem) }
+                    }
+                } else {
+                    GameButton("COLLECT ALL", Modifier.fillMaxWidth(), color = BV.Mint, dark = BV.MintDark, sound = "coin_cascade", icon = { BucksIcon(26.dp) }) {
+                        val b0 = App.repo.data.bucks; val g0 = App.repo.data.gems
+                        App.repo.collectIncome()
+                        if (App.repo.canClaimLogin()) { App.repo.claimLogin(); App.sfx("ui_reward") }
+                        got = (App.repo.data.bucks - b0) to (App.repo.data.gems - g0)
+                        confetti++; App.haptic(2)
+                    }
+                }
+            }
+        }
+        ConfettiBurst(confetti, Modifier.fillMaxWidth().height(380.dp))
+    }
+}
+
+/** One reward line of the welcome card: icon, title across the full width, then the amount (and the week's dots). */
+@Composable
+private fun WelcomeRow(icon: GIcon, title: String, sub: String?, tint: Color, streak: Int = -1, amount: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).border(2.dp, BV.CreamDark, RoundedCornerShape(16.dp)).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(tint), contentAlignment = Alignment.Center) { GameIcon(icon, 38.dp) }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.Heading.copy(fontSize = 15.sp), maxLines = 1)
+            if (sub != null) Text(sub, style = Type.Small.copy(fontSize = 12.sp), maxLines = 1)
+            Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                amount()
+                if (streak >= 0) {
+                    Spacer(Modifier.weight(1f))
+                    for (k in 0 until 7) Box(Modifier.padding(start = 3.dp).size(if (k == streak) 9.dp else 7.dp).clip(CircleShape)
+                        .background(if (k < streak) BV.Mint else if (k == streak) BV.Mustard else BV.CreamDark))
+                }
+            }
+        }
+    }
+}
+
 // --------------------------------------------------------------------------------------------- missions
 @Composable
 fun MissionsCard(onClose: () -> Unit) {
@@ -339,8 +384,9 @@ fun MissionsCard(onClose: () -> Unit) {
                     }
                     Spacer(Modifier.width(8.dp))
                     if (m.claimed) Text("✓", style = Type.Title.copy(color = BV.MintDark))
-                    else GameButton(if (m.rewardGems > 0) "${m.rewardGems}💎" else formatNum(m.rewardBucks), Modifier.width(92.dp), enabled = m.done, height = 42.dp, textSize = 15.sp,
-                        color = BV.Mustard, dark = BV.MustardDark, sound = "ui_reward") { App.repo.claimMission(m.id); App.haptic(1) }
+                    else GameButton(if (m.rewardGems > 0) "${m.rewardGems}" else formatNum(m.rewardBucks), Modifier.width(96.dp), enabled = m.done, height = 42.dp, textSize = 15.sp,
+                        color = BV.Mustard, dark = BV.MustardDark, sound = "ui_reward",
+                        icon = { if (m.rewardGems > 0) GemIcon(18.dp) else BucksIcon(18.dp) }) { App.repo.claimMission(m.id); App.haptic(1) }
                 }
             }
             Spacer(Modifier.height(4.dp))
@@ -351,11 +397,11 @@ fun MissionsCard(onClose: () -> Unit) {
     }
 }
 
-fun missionText(kind: String, item: String, goal: Int): String = when (kind) {
+fun missionText(kind: String, item: String, goal: Long): String = when (kind) {
     "serve" -> "Serve $goal customers"
-    "revenue" -> "Earn $$goal in shifts"
-    "win" -> "Win $goal shifts"
-    "stars3" -> "Get 3 stars on $goal shifts"
+    "revenue" -> "Earn $$goal from guests"
+    "build" -> "Build or upgrade $goal things"
+    "rush" -> "Survive $goal rush hours"
     "combo" -> "Reach a x${goal / 10f} combo"
     "item" -> "Serve $goal ${item.replaceFirstChar { it.uppercase() }}"
     "trays" -> "Clean $goal trays"
@@ -370,18 +416,30 @@ fun IncomeCard(onClose: () -> Unit) {
     val d = App.repo.state.value
     var collected by remember { mutableStateOf(-1L) }
     var confetti by remember { mutableIntStateOf(0) }
+    // close by itself shortly after collecting (it used to sit there showing "COLLECT 0")
+    LaunchedEffect(collected) { if (collected >= 0) { delay(1400); onClose() } }
     Box {
-        DialogCard("STORE INCOME", onClose, color = BV.Pink, dark = Color(0xFFE0668E)) {
+        DialogCard("IDLE INCOME", onClose, color = BV.Pink, dark = Color(0xFFE0668E)) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                d.stores.keys.forEach { id ->
-                    val s = Stores.byId(id)
+                Stores.ALL.forEach { s ->
+                    if (s.id !in d.stores) return@forEach
+                    val id = s.id
                     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(s.name, style = Type.Body, modifier = Modifier.weight(1f))
                         BucksIcon(18.dp); Text(" " + formatNum(App.repo.pendingIncome(id)), style = Type.Body)
                     }
                 }
+                // World Tour restaurants: one row per region (up to 20 restaurants each)
+                com.ngstudio.burgerready.game.Tour.REGIONS.forEachIndexed { r, reg ->
+                    val ids = com.ngstudio.burgerready.game.Tour.storeIds(r).filter { it in d.stores }
+                    if (ids.isEmpty()) return@forEachIndexed
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${reg.name} (${ids.size})", style = Type.Body, modifier = Modifier.weight(1f), maxLines = 1)
+                        BucksIcon(18.dp); Text(" " + formatNum(ids.sumOf { App.repo.pendingIncome(it) }), style = Type.Body)
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
-                Text("Stores fill up for ${Stores.INCOME_CAP_HOURS.toInt()} hours while you're away.", style = Type.Small.copy(textAlign = TextAlign.Center))
+                Text("Your restaurants keep earning for up to ${Stores.INCOME_CAP_HOURS.toInt()} hours while you're away.", style = Type.Small.copy(textAlign = TextAlign.Center))
                 Spacer(Modifier.height(10.dp))
                 if (collected >= 0) Text("+${formatNum(collected)} Bucks!", style = Type.Title.copy(color = BV.MintDark))
                 val pending = App.repo.totalPendingIncome()
@@ -407,8 +465,8 @@ fun RankCard(onClose: () -> Unit) {
             Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 InfoCell("Served", formatNum(d.counter("served")))
-                InfoCell("Stars", formatNum(d.totalStars().toLong()))
-                InfoCell("Wins", formatNum(d.counter("wins")))
+                InfoCell("Built", formatNum(d.builtTotal().toLong()))
+                InfoCell("Restaurants", "${d.stores.size}")
             }
             Spacer(Modifier.height(12.dp))
             val pendingGems = (rank - d.chefRankClaimed).coerceAtLeast(0) * 5

@@ -74,29 +74,39 @@ class Layout(
 }
 
 object Layouts {
-    /** (id, name, w, d, stations, tables, drive, minLevel) */
-    private data class Spec(val id: Int, val name: String, val w: Int, val d: Int, val stations: Int, val tables: Int, val drive: Boolean, val minLevel: Int)
+    /** (id, name, w, d, stations, tables, drive). Classic restaurant N uses layout min(N + 1, 8); 9–16 are World Tour templates. */
+    private data class Spec(val id: Int, val name: String, val w: Int, val d: Int, val stations: Int, val tables: Int, val drive: Boolean)
 
     private val specs = listOf(
-        Spec(1, "Bun Stand", 8, 9, 3, 2, false, 1),
-        Spec(2, "Corner Grill", 9, 10, 4, 4, false, 3),
-        Spec(3, "Classic Diner", 10, 11, 5, 5, true, 9),
-        Spec(4, "Patio Bistro", 11, 11, 5, 6, true, 30),
-        Spec(5, "Twin Kitchen", 12, 12, 6, 7, true, 60),
-        Spec(6, "Food Court", 13, 12, 7, 8, true, 120),
-        Spec(7, "Mega Diner", 14, 13, 7, 9, true, 250),
-        Spec(8, "Burger Palace", 15, 14, 8, 10, true, 500),
+        Spec(1, "Bun Stand", 8, 9, 3, 2, false),
+        Spec(2, "Corner Grill", 9, 10, 4, 4, false),
+        Spec(3, "Classic Diner", 10, 11, 5, 5, true),
+        Spec(4, "Patio Bistro", 11, 11, 5, 6, true),
+        Spec(5, "Twin Kitchen", 12, 12, 6, 7, true),
+        Spec(6, "Food Court", 13, 12, 7, 8, true),
+        Spec(7, "Mega Diner", 14, 13, 7, 9, true),
+        Spec(8, "Burger Palace", 15, 14, 8, 10, true),
+        // World Tour templates (docs/WORLD_TOUR_DESIGN.md §4.2). Append only: tour configs reference these ids.
+        Spec(9, "Pop-up Kiosk", 8, 8, 3, 2, false),
+        Spec(10, "Corner Café", 9, 9, 3, 3, false),
+        Spec(11, "Long Counter", 13, 10, 6, 6, true),
+        Spec(12, "Garden Terrace", 11, 13, 5, 8, false),
+        Spec(13, "Drive Hub", 11, 11, 5, 5, true),
+        Spec(14, "Market Hall", 14, 12, 7, 9, true),
+        Spec(15, "Grand Hall", 15, 13, 8, 10, true),
+        Spec(16, "Flagship", 15, 15, 8, 12, true),
     )
+
+    /** Templates used by the 12 classic restaurants (restaurant N uses min(N + 1, 8)). */
+    const val CLASSIC = 8
 
     private val cache = HashMap<Int, Layout>()
 
     fun count() = specs.size
-    fun minLevel(id: Int) = specs.first { it.id == id }.minLevel
-    fun unlockedFor(level: Int): List<Int> = specs.filter { it.minLevel <= level }.map { it.id }
     fun hasDrive(id: Int) = specs.first { it.id == id }.drive
 
     fun get(id: Int, mirror: Boolean = false): Layout {
-        val base = cache.getOrPut(id) { build(specs.first { it.id == id }) }
+        val base = synchronized(cache) { cache.getOrPut(id) { build(specs.first { it.id == id }) } }
         return if (mirror) base.mirrored() else base
     }
 
@@ -136,8 +146,12 @@ object Layouts {
         val trash = Placement(0.75f, counterZ - 0.4f)
         val drive = if (s.drive) Placement(w - 0.35f, 2.3f, (Math.PI / 2).toFloat()) else null
         val decorIn = ArrayList<Decor>()
-        decorIn.add(Decor("plant_pot", 0.55f, d - 0.55f))
-        decorIn.add(Decor("plant_pot", w - 0.55f, d - 0.55f))
+        // corner plants by the front wall; shallow tour layouts (d < 9) skip them: next to the first table row they
+        // left a gap narrower than the chef, who could wedge there (classic layouts are all 9 m or deeper)
+        if (s.d >= 9) {
+            decorIn.add(Decor("plant_pot", 0.55f, d - 0.55f))
+            decorIn.add(Decor("plant_pot", w - 0.55f, d - 0.55f))
+        }
         decorIn.add(Decor("lamp_floor", 0.5f, counterZ + 1.2f))
         if (!s.drive) decorIn.add(Decor("menu_board", w - 0.45f, 1.6f, (-Math.PI / 2).toFloat()))
         if (w >= 11) decorIn.add(Decor("plant_pot", w / 2f - 3.2f, d - 0.55f))
@@ -237,7 +251,9 @@ class NavGrid(val layout: Layout) {
         var start = cz(sz) * cols + cx(sx)
         var goal = cz(tz) * cols + cx(tx)
         if (inflated[goal]) goal = nearestFree(goal) ?: return null
-        if (inflated[start]) start = nearestFree(start) ?: return null
+        // A start inside the planning margin (e.g. squeezed between a table and a wall) snaps to the nearest free
+        // cell it can walk to in a straight line, never to one behind a wall (that made the walker push into it forever)
+        if (inflated[start]) start = nearestFreeFrom(start, sx, sz) ?: nearestFree(start) ?: return null
         if (start == goal) return floatArrayOf(tx, tz)
         java.util.Arrays.fill(gScore, Float.MAX_VALUE)
         java.util.Arrays.fill(closed, false)
@@ -335,6 +351,26 @@ class NavGrid(val layout: Layout) {
             val t = s.toFloat() / steps
             if (isInflated(x0 + dx * t, z0 + dz * t)) return false
         }
+        return true
+    }
+
+    /** [nearestFree], but only cells reachable from (x, z) in a straight line that crosses no hard obstacle. */
+    private fun nearestFreeFrom(i: Int, x: Float, z: Float): Int? {
+        val c0 = i % cols; val r0 = i / cols
+        for (rad in 1..14) for (dr in -rad..rad) for (dc in -rad..rad) {
+            if (maxOf(kotlin.math.abs(dr), kotlin.math.abs(dc)) != rad) continue
+            val c = c0 + dc; val r = r0 + dr
+            if (c < 0 || r < 0 || c >= cols || r >= rows) continue
+            val k = r * cols + c
+            if (!inflated[k] && hardClear(x, z, centerX(c), centerZ(r))) return k
+        }
+        return null
+    }
+
+    private fun hardClear(x0: Float, z0: Float, x1: Float, z1: Float): Boolean {
+        val dx = x1 - x0; val dz = z1 - z0
+        val steps = (kotlin.math.sqrt(dx * dx + dz * dz) / (cell * 0.5f)).toInt() + 1
+        for (s in 0..steps) { val t = s.toFloat() / steps; if (isBlocked(x0 + dx * t, z0 + dz * t)) return false }
         return true
     }
 

@@ -7,6 +7,7 @@ Filters match output names by prefix, e.g. `store_`, `theme_neon`, `upgrade_`,
 `card_food_burger`. Outputs go to app/src/main/assets/ui/:
 
     store_<id>.png      640x512  diorama per Store (floor, walls, counter, station, 3 signature props, env)
+    region_<id>.png     480x384  diorama per World Tour region (palette 0, region props, tree)
     theme_<id>.png      512x512  room corner per Interior Theme (tinted floor/walls/seats)
     upgrade_<id>.png    256x256  hero icon objects
     card_food_<id>.png  256x256  3/4 hero shot of a food item
@@ -374,6 +375,80 @@ def build_store(sid):
 
 
 # ---------------------------------------------------------------------------
+# 1b. World Tour region dioramas: region_<id>.png (480x384), generated from game/TourRegions.kt
+# (palette 0, floor, ground, the lead item's station, the region's new props, its tree)
+# ---------------------------------------------------------------------------
+import regions  # noqa: E402
+
+REGION_SPECS = {
+    "harbor": dict(colors=("#E8F0F7", "#2C4A7A", "#E94B3C"), floor=("floor_wood", None), slab=("#9AA3AE", "#787F87"), station="st_grill", props=['region_harbor_lighthouse', 'region_harbor_crate_stack', 'region_harbor_anchor'], tree="tree_pine"),
+    "blossom": dict(colors=("#FFF0F5", "#E86A92", "#3DDC97"), floor=("floor_wood", '#FFF1F4'), slab=("#8FCF6A", "#6FA152"), station="st_shake", props=['region_blossom_tree', 'region_blossom_kite'], tree="region_blossom_tree"),
+    "savanna": dict(colors=("#FFE8C2", "#C1662B", "#2E8B57"), floor=("floor_terrazzo", '#FFF2DE'), slab=("#D8B66A", "#A88D52"), station="st_grill", props=['region_savanna_acacia', 'region_savanna_jeep', 'region_savanna_drum'], tree="region_savanna_acacia"),
+    "polar": dict(colors=("#E6F2FF", "#1A5E9A", "#E94B3C"), floor=("floor_tile", '#D8E8F6'), slab=("#E6EEF7", "#B3B9C0"), station="st_grill", props=['region_polar_igloo', 'region_polar_ice_bench'], tree="tree_pine_snow"),
+    "delta": dict(colors=("#E7F4E4", "#2E7D4F", "#FF9A3C"), floor=("floor_wood", '#F2F7EC'), slab=("#6E9E55", "#557B42"), station="st_grill", props=['region_delta_riverboat', 'region_delta_lily_planter'], tree="palm"),
+    "castle": dict(colors=("#F1ECE2", "#6B3FA0", "#FFC23C"), floor=("floor_terrazzo", '#EDE6F5'), slab=("#A79F95", "#827C74"), station="st_grill", props=['region_castle_stone_tower', 'region_castle_market_stall', 'region_castle_barrels'], tree="tree_round"),
+    "gulch": dict(colors=("#F5DFC4", "#8B4A2B", "#FFC23C"), floor=("floor_wood", '#F7E3CF'), slab=("#C98F5E", "#9C6F49"), station="st_grill", props=['region_gulch_saloon_sign', 'region_gulch_hay_bale'], tree="store_desert_cactus"),
+    "cove": dict(colors=("#E8FBF8", "#1FA6B8", "#FF8FB1"), floor=("floor_wood", '#FFF8EA'), slab=("#F2D9A0", "#BCA97C"), station="st_shake", props=['region_cove_hammock', 'region_cove_treasure_chest'], tree="palm"),
+    "alpine": dict(colors=("#FFF4E6", "#B2452B", "#2E9E6A"), floor=("floor_wood", '#FFF6EA'), slab=("#86C95C", "#689C47"), station="st_grill", props=['region_alpine_milk_churn', 'region_alpine_fence'], tree="tree_pine"),
+    "arcade": dict(colors=("#E4DCFF", "#A47CFF", "#3DDC97"), floor=("floor_checker", '#E6DDFF'), slab=("#3B3F58", "#2E3144"), station="st_soda", props=['region_arcade_cabinet', 'region_arcade_prize_claw'], tree="store_tokyo_bonsai"),
+    "hollow": dict(colors=("#EDE2F7", "#5B3A8A", "#FF9A3C"), floor=("floor_wood", '#EFE3FA'), slab=("#55705A", "#425746"), station="st_shake", props=['region_hollow_pumpkin_stack', 'region_hollow_crooked_lamp'], tree="tree_pine"),
+    "funfair": dict(colors=("#FFF0F5", "#E94B3C", "#FFC23C"), floor=("floor_checker", '#FFF0E8'), slab=("#C2A57E", "#978062"), station="st_shake", props=['region_funfair_ferris_wheel', 'region_funfair_ticket_booth'], tree="palm"),
+    "ruins": dict(colors=("#F7E6C4", "#B8862B", "#1FA6B8"), floor=("floor_terrazzo", '#FFF0D6'), slab=("#E3C98F", "#B19C6F"), station="st_grill", props=['region_ruins_column', 'region_ruins_clay_urn'], tree="palm"),
+    "sky": dict(colors=("#F0F8FF", "#3D8BFF", "#FFC23C"), floor=("floor_tile", '#EAF4FF'), slab=("#A7DB8A", "#82AA6B"), station="st_grill", props=['region_sky_windmill', 'region_sky_hot_air_balloon'], tree="tree_round"),
+    "caverns": dict(colors=("#E6DEF5", "#6B3FA0", "#2FD3C9"), floor=("floor_tile", '#D9CCF2'), slab=("#5E5A6E", "#494655"), station="st_grill", props=['region_caverns_crystal_cluster', 'region_caverns_mine_cart', 'region_caverns_glow_mushroom'], tree="store_volcano_lava_rock"),
+    "farm": dict(colors=("#FFF2E2", "#C0392B", "#FFC23C"), floor=("floor_wood", '#FFF3E0'), slab=("#8CCB5E", "#6D9E49"), station="st_grill", props=['region_farm_barn_front', 'region_farm_haystack', 'region_farm_apple_crate'], tree="tree_round"),
+    "lunar": dict(colors=("#E8EEF6", "#3D5BA8", "#FF8FB1"), floor=("floor_tile", '#DDE6F2'), slab=("#9A9AA6", "#787881"), station="st_grill", props=['region_lunar_habitat_dome', 'region_lunar_moon_rover'], tree="store_space_astro_plant"),
+    "lagoon": dict(colors=("#F7EBDD", "#C0392B", "#FFC23C"), floor=("floor_wood", '#F4ECDF'), slab=("#4E8C8A", "#3C6D6B"), station="st_fryer", props=['region_lagoon_floating_lantern', 'region_lagoon_canoe'], tree="palm"),
+    "amber": dict(colors=("#FFEBD6", "#B2452B", "#2E7D4F"), floor=("floor_wood", '#FFEBD6'), slab=("#C98A3E", "#9C6B30"), station="st_grill", props=['region_amber_maple_tree', 'region_amber_leaf_pile'], tree="region_amber_maple_tree"),
+    "gearworks": dict(colors=("#F2E4D2", "#8B5A2B", "#1FA6B8"), floor=("floor_terrazzo", '#F2E2D2'), slab=("#8E6E5A", "#6E5546"), station="st_grill", props=['region_gearworks_giant_gear', 'region_gearworks_chimney_stack'], tree="tree_round"),
+    "glade": dict(colors=("#E8F6EC", "#2E7D6B", "#FF8FB1"), floor=("floor_wood", '#E8F4EA'), slab=("#4E8A5A", "#3C6B46"), station="st_grill", props=['region_glade_giant_mushroom', 'region_glade_toadstool_stool'], tree="region_glade_giant_mushroom"),
+    "springs": dict(colors=("#F2F4E8", "#2E7D4F", "#E94B3C"), floor=("floor_wood", '#F4F2E6'), slab=("#8FA88A", "#6F836B"), station="st_soda", props=['region_springs_bamboo_grove', 'region_springs_stone_lantern'], tree="region_springs_bamboo_grove"),
+    "frostfest": dict(colors=("#FFF0F0", "#C0392B", "#2E9E6A"), floor=("floor_checker", '#FFF0F0'), slab=("#EAF0F6", "#B6BBBF"), station="st_shake", props=['region_frostfest_festive_pine', 'region_frostfest_gift_stack'], tree="region_frostfest_festive_pine"),
+    "fossil": dict(colors=("#F2EEDC", "#6B4E3D", "#E94B3C"), floor=("floor_terrazzo", '#F2EEDC'), slab=("#8E9A55", "#6E7842"), station="st_grill", props=['region_fossil_fern_clump', 'region_fossil_dino_statue'], tree="region_fossil_fern_clump"),
+    "capital": dict(colors=("#FFF6E0", "#D9A21B", "#C0392B"), floor=("floor_tile", '#FFF3D6'), slab=("#D9C28A", "#A9976B"), station="st_grill", props=['region_capital_fountain', 'region_capital_golden_burger'], tree="tree_round"),
+}
+
+PROP_SPOTS = [(2.2, 0.85, 30, None, 2.2), (1.65, -1.65, 15, 1.1, 1.6), (-1.1, -1.9, 0, None, 1.5)]
+
+
+def _model_fn(name):
+    if name.startswith("region_"):
+        return getattr(regions, "build_" + name[len("region_"):])
+    if name.startswith("store_"):
+        st, prop = name[len("store_"):].split("_", 1)
+        return _sig(st, prop)
+    return _env(name)
+
+
+def build_region(rid):
+    spec = REGION_SPECS[rid]
+    wall, trim, accent = spec["colors"]
+    B.reset_scene()
+    fmodel, ftint = spec["floor"]
+    room_shell(FLOOR[fmodel], ftint or trim, wall, trim)
+    slab(5.6, 4.9, spec["slab"][0], spec["slab"][1], cx=0.45, cy=-0.15)
+    st = place(_st(spec["station"]), (0.15, 0.98, 0))
+    remap(st, tint=trim)
+    ct = place(stations.build_counter, (-0.05, -0.45, 0))
+    remap(ct, tint=trim, colors={"cream": wall, "offwhite": "#FFFFFF"})
+    a = anchors_of(ct)
+    z = a["rack0"].z
+    for fn in (food.build_burger, food.build_cheese):
+        it = place(fn, (a["rack0"].x, a["rack0"].y, z))
+        z = anchors_of(it)["top"].z
+    place(food.build_fries, tuple(a["rack1"]))
+    sd = place(food.build_soda, tuple(a["rack2"]))
+    remap(sd, tint=accent)
+    for (x, y, rz, fit, hcap), name in zip(PROP_SPOTS, spec["props"][:3]):
+        fn = _model_fn(name)
+        o = place(fn, (x, y, 0), rotz=rz, scale=fit_scale(fn, fit, hcap))
+        remap(o, tint=accent)
+    tfn = _model_fn(spec["tree"])
+    place(tfn, (-1.95, 2.0, 0), rotz=0, scale=fit_scale(tfn, None, 2.4))
+    finalize_and_render(os.path.join(UI_DIR, "region_%s.png" % rid), (480, 384), yaw=38, pitch=34, margin=1.05, samples=96)
+
+
+# ---------------------------------------------------------------------------
 # 2. Interior themes
 # ---------------------------------------------------------------------------
 THEMES = {
@@ -625,6 +700,8 @@ def build_food(fid):
 JOBS = {}
 for _s in STORE_SPECS:
     JOBS["store_" + _s] = (build_store, _s)
+for _r in REGION_SPECS:
+    JOBS["region_" + _r] = (build_region, _r)
 for _t in THEMES:
     JOBS["theme_" + _t] = (build_theme, _t)
 for _i in ICONS:

@@ -55,22 +55,47 @@ class Model(val name: String, val parts: Array<Part>, val anchors: Map<String, F
     fun anchor(name: String): FloatArray? = anchors[name]
 }
 
-/** Loads `.bvm` files from assets (format documented in tools/blender/bvlib.py). Must run on the GL thread. */
-class ModelCache(private val assets: AssetManager) {
-    private val cache = HashMap<String, Model>()
+/** CPU-side `.bvm` data. Parsed once per process; every new GL context only uploads it (see [ModelData]). */
+class ParsedPart(
+    val name: String, val parent: Int, val px: Float, val py: Float, val pz: Float,
+    val vbytes: ByteBuffer?, val ibuf: ByteBuffer?, val vertexCount: Int, val indexCount: Int,
+    val minY: Float, val maxY: Float, val radius: Float,
+)
+class ParsedModel(val name: String, val parts: Array<ParsedPart>, val anchors: Map<String, FloatArray>)
 
-    fun get(name: String): Model = cache.getOrPut(name) { load(name) }
-    fun getOrNull(name: String): Model? = try { get(name) } catch (e: Exception) { null }
+/**
+ * Process-wide cache of parsed models. Entering a restaurant creates a new GL context, which used to re-read and
+ * re-parse all 116 models (~200 ms on the Realme); now only the GPU upload is repeated. [preloadAsync] parses
+ * everything on a background thread at app start, so even the first visit skips the parsing.
+ */
+object ModelData {
+    private val parsed = HashMap<String, ParsedModel>()
+    @Volatile private var preloadStarted = false
 
-    fun clear() = cache.clear()
+    fun get(assets: AssetManager, name: String): ParsedModel {
+        synchronized(parsed) { parsed[name] }?.let { return it }
+        val m = parse(assets, name)
+        synchronized(parsed) { parsed[name] = m }
+        return m
+    }
 
-    private fun load(name: String): Model {
+    fun preloadAsync(assets: AssetManager) {
+        if (preloadStarted) return
+        preloadStarted = true
+        Thread({
+            try {
+                assets.list("models")?.forEach { f -> if (f.endsWith(".bvm")) try { get(assets, f.removeSuffix(".bvm")) } catch (_: Exception) {} }
+            } catch (_: Exception) {}
+        }, "ModelPreload").apply { priority = Thread.MIN_PRIORITY; isDaemon = true; start() }
+    }
+
+    private fun parse(assets: AssetManager, name: String): ParsedModel {
         val bytes = assets.open("models/$name.bvm").use { it.readBytes() }
         val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         val magic = ByteArray(4); bb.get(magic)
         require(String(magic) == "BVM1") { "Bad model magic in $name" }
         val partCount = bb.short.toInt() and 0xFFFF
-        val parts = ArrayList<Part>(partCount)
+        val parts = ArrayList<ParsedPart>(partCount)
         repeat(partCount) {
             val nl = bb.get().toInt() and 0xFF
             val nb = ByteArray(nl); bb.get(nb)
@@ -78,7 +103,6 @@ class ModelCache(private val assets: AssetManager) {
             val parent = bb.short.toInt()
             val px = bb.float; val py = bb.float; val pz = bb.float
             val vc = bb.int; val ic = bb.int
-            var mesh: Mesh? = null
             if (vc > 0 && ic > 0) {
                 val vbytes = GlUtil.byteBuffer(vc * 20)
                 var minY = Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var rad = 0f
@@ -96,17 +120,11 @@ class ModelCache(private val assets: AssetManager) {
                 val ibuf = GlUtil.byteBuffer(ic * 2)
                 ibuf.put(bytes, bb.position(), ic * 2).position(0)
                 bb.position(bb.position() + ic * 2)
-                val vbo = GlUtil.genBuffer()
-                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
-                GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, vc * 20, vbytes, GLES30.GL_STATIC_DRAW)
-                val ibo = GlUtil.genBuffer()
-                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ibo)
-                GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, ic * 2, ibuf, GLES30.GL_STATIC_DRAW)
-                mesh = Mesh("$name/$pname", vbo, ibo, ic, minY, maxY, rad)
+                parts.add(ParsedPart(pname, parent, px, py, pz, vbytes, ibuf, vc, ic, minY, maxY, rad))
             } else {
                 bb.position(bb.position() + vc * 20 + ic * 2)
+                parts.add(ParsedPart(pname, parent, px, py, pz, null, null, 0, 0, 0f, 0f, 0f))
             }
-            parts.add(Part(pname, parent, px, py, pz, mesh))
         }
         val anchors = HashMap<String, FloatArray>()
         if (bb.remaining() >= 2) {
@@ -117,6 +135,35 @@ class ModelCache(private val assets: AssetManager) {
                 anchors[String(nb)] = floatArrayOf(bb.float, bb.float, bb.float)
             }
         }
-        return Model(name, parts.toTypedArray(), anchors)
+        return ParsedModel(name, parts.toTypedArray(), anchors)
+    }
+}
+
+/** GPU models for one GL context, built from [ModelData] (format documented in tools/blender/bvlib.py). Must run on the GL thread. */
+class ModelCache(private val assets: AssetManager) {
+    private val cache = HashMap<String, Model>()
+
+    fun get(name: String): Model = cache.getOrPut(name) { load(name) }
+    fun getOrNull(name: String): Model? = try { get(name) } catch (e: Exception) { null }
+
+    fun clear() = cache.clear()
+
+    private fun load(name: String): Model {
+        val pm = ModelData.get(assets, name)
+        val parts = Array(pm.parts.size) { i ->
+            val p = pm.parts[i]
+            var mesh: Mesh? = null
+            if (p.vbytes != null && p.ibuf != null) {
+                val vbo = GlUtil.genBuffer()
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
+                GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, p.vertexCount * 20, p.vbytes, GLES30.GL_STATIC_DRAW)
+                val ibo = GlUtil.genBuffer()
+                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ibo)
+                GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, p.indexCount * 2, p.ibuf, GLES30.GL_STATIC_DRAW)
+                mesh = Mesh("$name/${p.name}", vbo, ibo, p.indexCount, p.minY, p.maxY, p.radius)
+            }
+            Part(p.name, p.parent, p.px, p.py, p.pz, mesh)
+        }
+        return Model(name, parts, pm.anchors)
     }
 }

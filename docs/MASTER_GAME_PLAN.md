@@ -3,6 +3,7 @@
 > **Status: approved 2026-11-23 with the name "Bun Voyage!" and implemented.** This is the original design document, kept for reference: research, economy, the difficulty formula and the screen list.
 > - Where the build differs, see [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) (deviations table).
 > - For how the code works, see [ARCHITECTURE.md](ARCHITECTURE.md).
+> - ⚠️ **Superseded on 2026-11-27:** the 10,000 timed levels (§5: difficulty curve, bosses, mutators, tuned targets, `LevelGenerator`, `AllLevelsValidatorTest`) were replaced by **12 persistent restaurants** with fixed build plans. See [MARKET_ANALYSIS.md](MARKET_ANALYSIS.md) for why and [ARCHITECTURE.md §4](ARCHITECTURE.md#4-restaurants-and-the-build-plan-gamerestaurantkt) for how.
 > - For changing it, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 >
 > Sections 13–14 (build order, open questions) are historical. Testing was done on an emulator configured like the Realme, because the phone was in use.

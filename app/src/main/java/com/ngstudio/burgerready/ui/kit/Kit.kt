@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -51,8 +52,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
@@ -76,14 +79,16 @@ fun OutlinedText(
     text: String, modifier: Modifier = Modifier, size: TextUnit = 22.sp, color: Color = BV.White,
     outline: Color = BV.Cocoa, stroke: Dp = 2.dp, align: TextAlign = TextAlign.Center, maxLines: Int = 2,
 ) {
+    // A round-joined stroke behind the fill (plus the same stroke dropped as a shadow): 3 text layers instead of 10
+    // offset copies, and a smoother outline.
+    val strokePx = with(LocalDensity.current) { stroke.toPx() }
     val style = TextStyle(fontFamily = Lilita, fontSize = size, textAlign = align)
+    val outlineStyle = remember(size, align, outline, strokePx) {
+        style.copy(color = outline, drawStyle = Stroke(width = strokePx * 2f, join = StrokeJoin.Round))
+    }
     Box(modifier) {
-        val s = stroke.value
-        for (k in 0 until 8) {
-            val a = k * PI / 4
-            Text(text, style = style.copy(color = outline), maxLines = maxLines, modifier = Modifier.offset((cos(a) * s).dp, (sin(a) * s).dp))
-        }
-        Text(text, style = style.copy(color = outline), maxLines = maxLines, modifier = Modifier.offset(0.dp, (s * 1.6f).dp))
+        Text(text, style = outlineStyle, maxLines = maxLines, modifier = Modifier.offset(0.dp, stroke * 1.2f))
+        Text(text, style = outlineStyle, maxLines = maxLines)
         Text(text, style = style.copy(color = color), maxLines = maxLines)
     }
 }
@@ -189,7 +194,9 @@ fun CurrencyChip(icon: @Composable () -> Unit, value: Long, modifier: Modifier =
     Row(modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(color).border(2.dp, BV.Cocoa, RoundedCornerShape(18.dp)).padding(end = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { icon() }
-        Text(formatNum(anim.value.toLong()), style = Type.Number.copy(fontSize = 17.sp), modifier = Modifier.widthIn(min = 30.dp))
+        val txt = formatNum(anim.value.toLong())
+        // never wrap ("5,00" over "0" in the narrow gem chip): long values step down a size
+        Text(txt, style = Type.Number.copy(fontSize = if (txt.length >= 5) 15.sp else 17.sp), modifier = Modifier.widthIn(min = 30.dp), maxLines = 1, softWrap = false)
         if (onPlus != null) {
             Spacer(Modifier.width(4.dp))
             Box(Modifier.size(20.dp).clip(CircleShape).background(BV.Mint).clickable { App.sfx("ui_tap"); onPlus() }, contentAlignment = Alignment.Center) {
@@ -199,11 +206,23 @@ fun CurrencyChip(icon: @Composable () -> Unit, value: Long, modifier: Modifier =
     }
 }
 
+/** Wallet-style numbers: "9,999", then three significant digits ("12.5K", "900K", "1.25M", "84.2B"). */
 fun formatNum(v: Long): String = when {
-    v >= 1_000_000_000 -> String.format("%.2fB", v / 1e9)
-    v >= 1_000_000 -> String.format("%.2fM", v / 1e6)
-    v >= 10_000 -> String.format("%.1fK", v / 1e3)
+    v >= 1_000_000_000_000 -> sig3(v / 1e12, "T")
+    v >= 1_000_000_000 -> sig3(v / 1e9, "B")
+    v >= 1_000_000 -> sig3(v / 1e6, "M")
+    v >= 10_000 -> sig3(v / 1e3, "K")
     else -> "%,d".format(v)
+}
+
+private fun sig3(x: Double, unit: String): String {
+    // floor, so a wallet never shows more than it holds; "84.0K" → "84K", "1.50M" → "1.5M"
+    val t = when {
+        x >= 100 -> String.format(java.util.Locale.US, "%.0f", kotlin.math.floor(x))
+        x >= 10 -> String.format(java.util.Locale.US, "%.1f", kotlin.math.floor(x * 10) / 10)
+        else -> String.format(java.util.Locale.US, "%.2f", kotlin.math.floor(x * 100) / 100)
+    }
+    return (if ('.' in t) t.trimEnd('0').trimEnd('.') else t) + unit
 }
 
 /** Coin icon drawn in code (gold coin with a bun emblem). */
@@ -315,6 +334,15 @@ fun Modifier.pulse(min: Float = 0.94f, max: Float = 1.06f, period: Int = 900): M
     val s by t.animateFloat(min, max, infiniteRepeatable(tween(period), RepeatMode.Reverse), label = "ps")
     return this.graphicsLayer { scaleX = s; scaleY = s }
 }
+
+/** Hides content above [clear] and fades it in over [fade] (for lists that scroll under a floating bar). */
+fun Modifier.fadeTop(clear: Dp, fade: Dp): Modifier = this
+    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val a = clear.toPx()
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = a, endY = a + fade.toPx()), blendMode = androidx.compose.ui.graphics.BlendMode.DstIn)
+    }
 
 /** Red notification dot. */
 @Composable

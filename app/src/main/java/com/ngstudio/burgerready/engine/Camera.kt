@@ -43,8 +43,14 @@ class Camera {
     /** Half-size (m) of the light frustum used for shadows; covers what the camera sees. */
     val shadowExtent: Float get() = distance * 0.95f
 
+    // Allowed range for the follow target (focus pans may still go outside it).
+    private var minX = -1e6f; private var maxX = 1e6f; private var minZ = -1e6f; private var maxZ = 1e6f
+
+    fun setBounds(x0: Float, x1: Float, z0: Float, z1: Float) { minX = x0; maxX = x1; minZ = z0; maxZ = z1 }
+
     fun snapTo(x: Float, z: Float) {
-        targetX = x; targetZ = z; goalX = x; goalZ = z
+        val cx = x.coerceIn(minX, maxX).coerceIn(x - 1.9f, x + 1.9f); val cz = z.coerceIn(minZ, maxZ).coerceIn(z - 2.9f, z + 5.6f)
+        targetX = cx; targetZ = cz; goalX = x; goalZ = z
         lookAheadX = 0f; lookAheadZ = 0f
     }
 
@@ -64,8 +70,10 @@ class Camera {
     fun punch(amount: Float) { zoomPunch = maxOf(zoomPunch, amount) }
 
     fun update(dt: Float) {
-        var gx = goalX + lookAheadX
-        var gz = goalZ + lookAheadZ
+        // Stay inside the restaurant bounds, but never so far that the followed character leaves the safe part of the
+        // screen (sidewalk staff pads can sit beyond the building's sides; the bottom HUD covers the last ~12 %).
+        var gx = (goalX + lookAheadX).coerceIn(minX, maxX).coerceIn(goalX - 1.9f, goalX + 1.9f)
+        var gz = (goalZ + lookAheadZ).coerceIn(minZ, maxZ).coerceIn(goalZ - 2.9f, goalZ + 5.6f)
         if (focusTime > 0f) {
             focusTime -= dt
             val k = if (focusTime > focusHold) 1f - (focusTime - focusHold) / 0.6f else if (focusTime < 0.6f) focusTime / 0.6f else 1f

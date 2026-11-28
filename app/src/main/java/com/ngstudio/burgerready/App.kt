@@ -9,9 +9,6 @@ import com.ngstudio.burgerready.ads.NoAds
 import com.ngstudio.burgerready.audio.AudioEngine
 import com.ngstudio.burgerready.data.GameRepo
 import com.ngstudio.burgerready.engine.Quality
-import com.ngstudio.burgerready.game.LevelGenerator
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class App : Application() {
     override fun onCreate() {
@@ -22,8 +19,9 @@ class App : Application() {
         audio = AudioEngine(this)
         applySettings()
         Thread({ audio.load() }, "sfx-load").start()
+        // parse the 3D models in the background, so entering a restaurant only uploads them to the GPU
+        com.ngstudio.burgerready.engine.ModelData.preloadAsync(assets)
         ads = if (BuildConfig.DEBUG_AD_UNLOCK) DebugMockAds else NoAds
-        loadLevelTargets(this)
     }
 
     companion object {
@@ -72,14 +70,6 @@ class App : Application() {
                     }
                 }
             }
-        }
-
-        fun loadLevelTargets(context: Context) {
-            try {
-                val bytes = context.assets.open("levels/targets.bin").use { it.readBytes() }
-                val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-                LevelGenerator.installTargets(IntArray(bytes.size / 4) { bb.int })
-            } catch (e: Exception) { /* not tuned yet: analytic targets are used */ }
         }
     }
 }

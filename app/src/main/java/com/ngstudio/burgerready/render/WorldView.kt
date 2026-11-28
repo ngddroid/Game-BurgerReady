@@ -56,13 +56,89 @@ class WorldView(
     private val partG = FloatArray(16 * 16)
     private val local = FloatArray(16)
     private var ground: Mesh? = null
-    private var groundKey = ""
+    private var groundLayout: Any? = null
+    private var groundStore: Any? = null
     var time = 0f
     /** 0 = day, 1 = night (set by the renderer each frame); drives lamp glow pools. */
     var night = 0f
     private val shirtColors = intArrayOf(0xF2542D, 0x1FA6B8, 0x3DDC97, 0xFFC23C, 0xB79CFF, 0xFF8FB1, 0x3D8BFF, 0xFF9A3C, 0x4CC38A, 0xE94B3C, 0x2C3E66, 0x9B2C5C)
     private val carColors = intArrayOf(0xF2542D, 0x1FA6B8, 0xFFC23C, 0x3DDC97, 0xFF8FB1, 0xB79CFF, 0x3D8BFF, 0xFFFFFF)
     private val petPos = floatArrayOf(0f, 0f, 0f, 0f) // x, z, yaw, phase
+    private var doorFade = 1f
+    // Kitchen checker: a clear mint-teal instead of the old near-white (read as washed out next to the wood floors).
+    private val KITCHEN_A = rgbF(0xC4E4DE)
+    private val KITCHEN_B = rgbF(0xA9D4CD)
+    private val DOORMAT = rgbF(0xC9B9A6)
+
+    // ---- per-frame caches: names, colours and labels are built once, never inside draw()
+    private val foodModel = Array(Item.entries.size) { "food_" + Item.entries[it].id }
+    private val iconName = Array(Item.entries.size) { "icon_" + Item.entries[it].id }
+    private val charModel = Array(Species.entries.size) { "char_" + Species.entries[it].id }
+    private val shirtRgb = Array(shirtColors.size) { rgbF(shirtColors[it]) }
+    private val carRgb = Array(carColors.size) { rgbF(carColors[it]) }
+    private val staffRgb = arrayOf(rgbF(0x1FA6B8), rgbF(0xFFC23C), rgbF(0x3DDC97)) // by StaffRole ordinal
+    private val hireTag = Array(StaffRole.entries.size) { "HIRE " + StaffRole.entries[it].label.uppercase() }
+    private val countStr = Array(10) { it.toString() }
+    private val HAT_RED = rgbF(0xF2542D)
+    private val CRITIC_HAT = rgbF(0x2C3E66)
+    private val RACCOON_TINT = rgbF(0x2C2C34)
+    private val PATIENCE_MID = rgbF(0xFFC23C)
+    private val PATIENCE_LOW = rgbF(0xF2542D)
+    private val puIcon = arrayOf("bolt", "heart", "star") // by PowerUpKind ordinal
+    private val puRgb = arrayOf(rgbF(0x8B5A3C), rgbF(0xE94B3C), rgbF(0xFFC23C))
+    private var styleKey: VisualStyle? = null
+    private val trimC = FloatArray(3)
+    private val floorC = FloatArray(3)
+    private val floorAltC = FloatArray(3)
+    private val seatC = FloatArray(3)
+    private val apronC = FloatArray(3)
+    private var playerHat: String? = null
+    private var padLabelVal = LongArray(0)
+    private var padLabel = arrayOfNulls<String>(0)
+    private val racks = ArrayList<Item>(4)
+    private var racksFor: Any? = null
+    private val guideTarget = FloatArray(2)
+    private val RACK = arrayOf("rack0", "rack1", "rack2", "rack3")
+
+    private fun setRgb(out: FloatArray, c: Int) { out[0] = ((c shr 16) and 255) / 255f; out[1] = ((c shr 8) and 255) / 255f; out[2] = (c and 255) / 255f }
+
+    /**
+     * Dining-floor tint for tile floors in the default theme. The tile model is white, so restaurants with tile
+     * floors (Rooftop, Tokyo, Space, Underwater) used to get a near-white floor that went pale lavender at night.
+     */
+    private fun storeFloorTint(st: StoreDef): Int = st.floorTint
+
+    private fun updateStyle(style: VisualStyle) {
+        if (styleKey === style) return
+        styleKey = style
+        val st = style.store; val th = style.theme
+        val classic = th.id == "classic"
+        setRgb(trimC, if (classic) st.trim else th.trim)
+        setRgb(floorC, if (classic) storeFloorTint(st) else th.floorTint)
+        floorAltC[0] = floorC[0] * 0.93f; floorAltC[1] = floorC[1] * 0.92f; floorAltC[2] = floorC[2] * 0.92f
+        setRgb(seatC, if (classic) st.trim else th.seat)
+        setRgb(apronC, style.apron)
+        playerHat = style.playerHat?.let { "hat_$it" }
+    }
+
+    private fun padLabelFor(pad: com.ngstudio.burgerready.game.Pad): String {
+        val i = pad.index
+        if (i >= padLabelVal.size) { padLabelVal = LongArray(i + 16) { -1L }; padLabel = arrayOfNulls(i + 16) }
+        val v = pad.remaining
+        if (padLabelVal[i] != v || padLabel[i] == null) { padLabelVal[i] = v; padLabel[i] = "$" + formatShort(v) }
+        return padLabel[i]!!
+    }
+
+    private fun padNear(w: World, x: Float, z: Float, r: Float): Boolean {
+        for (p in w.pads) if (p.visible && !p.done && abs(p.x - x) < r && abs(p.z - z) < r) return true
+        return false
+    }
+
+    /** Soft contact shadow under characters when the shadow map is off (LOW quality). */
+    private fun blob(r: Renderer, x: Float, z: Float, size: Float) {
+        if (r.quality.shadows) return
+        r.sprite(x, 0.035f, z, size * 1.1f, size * 1.1f, atlas.uv("soft"), 0.16f, 0.10f, 0.14f, 0.5f, mode = 1)
+    }
 
     fun mdl(name: String): Model? = models.getOrNull(name)
 
@@ -150,7 +226,8 @@ class WorldView(
             if (part.parent >= 0 && part.parent < i) M4.mul(partG, i * 16, partG, part.parent * 16, local, 0)
             else M4.mul(partG, i * 16, root, 0, local, 0)
             val mesh = part.mesh ?: continue
-            r.draw(mesh, partG, i * 16, tint?.get(0) ?: 1f, tint?.get(1) ?: 1f, tint?.get(2) ?: 1f, 1f, flash, 0f, 0f, true, outline)
+            val caster = when (part.name) { "body", "head", "legL", "legR" -> true; else -> false }
+            r.draw(mesh, partG, i * 16, tint?.get(0) ?: 1f, tint?.get(1) ?: 1f, tint?.get(2) ?: 1f, 1f, flash, 0f, 0f, caster, outline)
         }
         if (hat != null) {
             val head = model.part("head")
@@ -164,21 +241,23 @@ class WorldView(
                     val mesh = hpart.mesh ?: continue
                     M4.identity(local, 0); local[12] = hpart.pivotX; local[13] = hpart.pivotY; local[14] = hpart.pivotZ
                     M4.mul(m, 0, tmp, 0, local, 0)
-                    r.draw(mesh, m, 0, hatTint?.get(0) ?: 1f, hatTint?.get(1) ?: 1f, hatTint?.get(2) ?: 1f, 1f, flash, 0f, 0f, true, outline)
+                    r.draw(mesh, m, 0, hatTint?.get(0) ?: 1f, hatTint?.get(1) ?: 1f, hatTint?.get(2) ?: 1f, 1f, flash, 0f, 0f, false, outline)
                 }
             }
         }
     }
 
     /** Draws a stack of items held in front of a character drawn last with [drawCharacter]. */
-    fun drawHeldStack(r: Renderer, model: Model?, items: List<Item>, sway: Float, scale: Float = 1f) {
+    private val DEFAULT_HAND = floatArrayOf(0f, 0.55f, 0.26f)
+
+    fun drawHeldStack(r: Renderer, model: Model?, items: List<Item>, sway: Float, scale: Float = 1f, max: Int = Int.MAX_VALUE) {
         if (items.isEmpty()) return
-        val hand = model?.anchor("hand") ?: floatArrayOf(0f, 0.55f, 0.26f)
+        val hand = model?.anchor("hand") ?: DEFAULT_HAND
         var y = hand[1]
-        val n = items.size
+        val n = min(items.size, max)
         for (i in 0 until n) {
             val it = items[i]
-            val im = mdl("food_${it.id}") ?: continue
+            val im = mdl(foodModel[it.ordinal]) ?: continue
             val k = i.toFloat() / max(1, 12)
             val off = sway * (i * 0.06f + k * k * 0.5f)
             // position in character root space
@@ -188,7 +267,7 @@ class WorldView(
                 val mesh = pp.mesh ?: continue
                 M4.identity(local, 0); local[12] = pp.pivotX; local[13] = pp.pivotY; local[14] = pp.pivotZ
                 M4.mul(m, 0, tmp, 0, local, 0)
-                r.draw(mesh, m, 0, outline = false)
+                r.draw(mesh, m, 0, shadow = false, outline = false)
             }
             y += it.height * 0.95f
         }
@@ -199,11 +278,11 @@ class WorldView(
         time += dt
         val lay = w.layout
         val st = style.store
-        val th = style.theme
-        val wall = rgbF(th.wallTint.takeIf { th.id != "classic" } ?: st.wall)
-        val trim = rgbF(th.trim.takeIf { th.id != "classic" } ?: st.trim)
-        val floorT = rgbF(th.floorTint)
-        val seat = rgbF(th.seat.takeIf { th.id != "classic" } ?: st.trim)
+        updateStyle(style)
+        val trim = trimC
+        val floorT = floorC
+        val floorAlt = floorAltC
+        val seat = seatC
 
         drawGround(r, w, style)
         // ---- interior floor (two zones: kitchen + dining)
@@ -212,11 +291,12 @@ class WorldView(
         for (zi in 0 until lay.d) for (xi in 0 until lay.w) {
             val inKitchen = zi + 0.5f < lay.counter.z
             val fm = if (inKitchen) kitchenFloor else floorModel
-            val t = if (inKitchen) rgbF(0xF7F1EA) else floorT
+            val alt = (xi + zi) % 2 == 0
+            val t = if (inKitchen) (if (alt) KITCHEN_A else KITCHEN_B) else (if (alt) floorT else floorAlt)
             drawModel(r, fm, xi + 0.5f, 0f, zi + 0.5f, 0f, 1f, t, shadow = false)
         }
         // door mat area outside
-        for (xi in -1..1) drawModel(r, mdl("floor_tile"), lay.doorX + xi, 0f, lay.d + 0.5f, 0f, 1f, rgbF(0xE8E2D8), shadow = false)
+        for (xi in -1..1) drawModel(r, mdl("floor_tile"), lay.doorX + xi, 0f, lay.d + 0.5f, 0f, 1f, DOORMAT, shadow = false)
         // ---- walls
         val wallM = mdl("wall"); val winM = mdl("wall_window"); val post = mdl("wall_post")
         val half = (PI / 2).toFloat()
@@ -233,32 +313,35 @@ class WorldView(
             if (abs(cx - lay.doorX) < 1.0f) continue
             drawModel(r, wallM, cx, 0f, lay.d.toFloat(), PI.toFloat(), 1f, trim, sy = 0.45f)
         }
-        drawModel(r, mdl("door_frame"), lay.doorX, 0f, lay.d.toFloat(), 0f, 1f, trim)
-        for (pt in arrayOf(floatArrayOf(0f, 0f), floatArrayOf(lay.w.toFloat(), 0f), floatArrayOf(0f, lay.d.toFloat()), floatArrayOf(lay.w.toFloat(), lay.d.toFloat())))
-            drawModel(r, post, pt[0], 0f, pt[1], 0f, 1f, trim)
+        val pl = w.player
+        val behindDoor = abs(pl.x - lay.doorX) < 1.8f && pl.z < lay.d && pl.z > lay.d - 2.6f
+        doorFade += ((if (behindDoor) 0.35f else 1f) - doorFade) * min(1f, dt * 8f)
+        drawModel(r, mdl("door_frame"), lay.doorX, 0f, lay.d.toFloat(), 0f, 1f, trim, alpha = if (doorFade > 0.98f) 1f else doorFade)
+        drawModel(r, post, 0f, 0f, 0f, 0f, 1f, trim)
+        drawModel(r, post, lay.w.toFloat(), 0f, 0f, 0f, 1f, trim)
+        drawModel(r, post, 0f, 0f, lay.d.toFloat(), 0f, 1f, trim)
+        drawModel(r, post, lay.w.toFloat(), 0f, lay.d.toFloat(), 0f, 1f, trim)
 
         // ---- decor (outdoor trees swap per store so every shift shows where you are)
-        val treeModel = when (st.id) {
-            "lodge" -> "tree_pine_snow"; "seaside", "jungle" -> "palm"; "desert" -> "store_desert_cactus"
-            "candy" -> "store_candy_gumdrop_tree"; "volcano" -> "store_volcano_lava_rock"; "space" -> "store_space_astro_plant"
-            "underwater" -> "store_underwater_coral"; "tokyo" -> "store_tokyo_bonsai"; else -> "tree_round"
-        }
+        val treeModel = st.tree
         for (dcr in lay.decorInside) {
             if (dcr.model == "plant_pot" && dcr.x > lay.w / 2f && dcr.z > lay.d - 1f) continue // replaced by a signature prop
             drawModel(r, mdl(dcr.model), dcr.x, 0f, dcr.z, dcr.yaw, dcr.scale, trim)
         }
         for (dcr in lay.decorOutside) {
+            // the bench and flower bed share the sidewalk with the staff pads: step aside while a pad shows there
+            if (dcr.z > lay.d && (dcr.model == "bench" || dcr.model == "flower_bed") && padNear(w, dcr.x, dcr.z, 1.25f)) continue
             val name = if (dcr.model == "tree_round") treeModel else dcr.model
             drawModel(r, mdl(name) ?: mdl(dcr.model), dcr.x, 0f, dcr.z, dcr.yaw, dcr.scale, trim)
         }
         // store signature props: two by the entrance, one in the dining corner (scaled to fit)
-        st.props.forEachIndexed { i, name ->
-            val pm = mdl(name) ?: return@forEachIndexed
-            val (px, pz, maxR) = when (i) {
-                0 -> Triple(lay.doorX - 2.45f, lay.d + 1.95f, 0.6f)
-                1 -> Triple(lay.doorX + 2.5f, lay.d + 1.95f, 0.6f)
-                else -> Triple(lay.w - 0.75f, lay.d - 0.75f, 0.5f)
-            }
+        for (i in st.props.indices) {
+            val pm = mdl(st.props[i]) ?: continue
+            val px = when (i) { 0 -> lay.doorX - 2.45f; 1 -> lay.doorX + 2.5f; else -> lay.w - 0.75f }
+            val pz = if (i < 2) lay.d + 1.95f else lay.d - 0.75f
+            val maxR = if (i < 2) 0.6f else 0.5f
+            // the sidewalk hosts staff / NEW RESTAURANT pads: step aside while one is showing there
+            if (i < 2 && padNear(w, px, pz, 1.6f)) continue
             if (pm.radius > 1.6f && i < 2) {
                 // big props (food truck, towers) get their own lawn spot at full size
                 drawModel(r, pm, -3.4f, 0f, lay.d - 4.5f + i * 3.2f, half, 1f, trim)
@@ -270,13 +353,38 @@ class WorldView(
 
         if (night > 0.15f) {
             val a = ((night - 0.15f) / 0.6f).coerceIn(0f, 1f) * 0.55f
-            for (dcr in lay.decorInside + lay.decorOutside) {
-                if (!dcr.model.startsWith("lamp")) continue
-                r.sprite(dcr.x, 0.05f, dcr.z, 4.2f, 4.2f, atlas.uv("light_pool"), 1f, 0.82f, 0.48f, a, mode = 1)
-            }
+            for (dcr in lay.decorInside) if (dcr.model.startsWith("lamp")) r.sprite(dcr.x, 0.05f, dcr.z, 4.2f, 4.2f, atlas.uv("light_pool"), 1f, 0.82f, 0.48f, a, mode = 1)
+            for (dcr in lay.decorOutside) if (dcr.model.startsWith("lamp")) r.sprite(dcr.x, 0.05f, dcr.z, 4.2f, 4.2f, atlas.uv("light_pool"), 1f, 0.82f, 0.48f, a, mode = 1)
             // warm spill under the counter and door
             r.sprite(lay.counter.x, 0.05f, lay.counter.z + 0.8f, 5f, 3.2f, atlas.uv("light_pool"), 1f, 0.85f, 0.55f, a * 0.6f, mode = 1)
             r.sprite(lay.doorX, 0.05f, lay.d + 0.6f, 3.6f, 2.4f, atlas.uv("light_pool"), 1f, 0.85f, 0.55f, a * 0.7f, mode = 1)
+            // Lit windows: lamp light falls out of every window onto the lawn and out of the shop front onto the
+            // sidewalk, so the restaurant glows against the night instead of sitting in one flat blue.
+            val pool = atlas.uv("light_pool")
+            val wa = min(1f, a * 1.6f)
+            for (xi in 0 until lay.w) if (xi in lay.windowsBack) r.sprite(xi + 0.5f, 0.04f, -0.8f, 2.3f, 1.8f, pool, 1f, 0.76f, 0.38f, wa, mode = 1)
+            for (zi in 0 until lay.d) if (zi in lay.windowsSide) {
+                r.sprite(-0.85f, 0.04f, zi + 0.5f, 1.8f, 2.4f, pool, 1f, 0.76f, 0.38f, wa, mode = 1)
+                if (lay.drive == null || abs(zi + 0.5f - lay.drive.z) >= 1.0f) r.sprite(lay.w + 0.85f, 0.04f, zi + 0.5f, 1.8f, 2.4f, pool, 1f, 0.76f, 0.38f, wa, mode = 1)
+            }
+            var fx = 1f
+            while (fx < lay.w) {
+                if (abs(fx - lay.doorX) > 1.7f) r.sprite(fx, 0.04f, lay.d + 0.65f, 2.5f, 1.7f, pool, 1f, 0.78f, 0.42f, wa * 0.9f, mode = 1)
+                fx += 2f
+            }
+            // street-lamp halos around the bulbs (the ground pools above only lit the pavement)
+            val soft = atlas.uv("soft")
+            for (i in lay.decorOutside.indices) {
+                val dcr = lay.decorOutside[i]
+                if (dcr.model == "lamp_street") {
+                    r.sprite(dcr.x, 2.74f, dcr.z, 1.5f, 1.5f, soft, 1f, 0.86f, 0.55f, a * 0.85f)
+                    r.sprite(dcr.x, 2.74f, dcr.z, 0.55f, 0.55f, soft, 1f, 0.97f, 0.85f, a)
+                }
+            }
+            for (i in lay.decorInside.indices) {
+                val dcr = lay.decorInside[i]
+                if (dcr.model == "lamp_floor") r.sprite(dcr.x, 1.3f, dcr.z, 0.9f, 0.9f, soft, 1f, 0.9f, 0.62f, a * 0.8f)
+            }
         }
         drawStations(r, w, cam, trim)
         drawCounter(r, w, trim)
@@ -296,20 +404,19 @@ class WorldView(
 
     private fun drawGround(r: Renderer, w: World, style: VisualStyle) {
         val lay = w.layout
-        val key = "${lay.id}-${lay.w}-${lay.d}-${style.store.id}"
-        if (ground == null || groundKey != key) {
+        if (ground == null || groundLayout !== lay || groundStore !== style.store) {
             val b = MeshBuilder()
-            val grass = when (style.store.ground) {
-                "ground_sand" -> 0xF3D9A4; "ground_snow" -> 0xEEF4FB; "ground_rock" -> 0x6B5550; "ground_metal" -> 0xB8C2CF
-                "ground_sidewalk" -> 0xC9CED6; else -> 0x9BD66A
+            val grass = if (style.store.groundColor >= 0) style.store.groundColor else when (style.store.ground) {
+                "ground_sand" -> 0xEFC98A; "ground_snow" -> 0xE2ECF7; "ground_rock" -> 0x6B5550; "ground_metal" -> 0xA4AFBF
+                "ground_sidewalk" -> 0xB7BDC8; else -> 0x7FC94E
             }
             val grassDark = darken(grass, 0.88f)
             val x0 = -24f; val x1 = lay.w + 24f; val z0 = -20f; val z1 = lay.d + 24f
             b.quadXZ4(x0, z0, x1, z1, -0.03f, grassDark, grass, grass, grassDark)
             // sidewalk and road along the front
-            b.quadXZ(x0, lay.d.toFloat(), x1, lay.d + 2.3f, -0.01f, 0xD9DDE3)
-            b.quadXZ(x0, lay.d + 2.3f, x1, lay.d + 2.45f, -0.005f, 0xB5BBC4)
-            b.quadXZ(x0, lay.d + 2.45f, x1, lay.d + 7.2f, -0.02f, 0x555A66)
+            b.quadXZ(x0, lay.d.toFloat(), x1, lay.d + 2.3f, -0.01f, 0xC4C9D1)
+            b.quadXZ(x0, lay.d + 2.3f, x1, lay.d + 2.45f, -0.005f, 0x9AA2AE)
+            b.quadXZ(x0, lay.d + 2.45f, x1, lay.d + 7.2f, -0.02f, 0x4B5060)
             var xx = x0
             while (xx < x1) { b.quadXZ(xx, lay.d + 4.75f, xx + 1.2f, lay.d + 4.9f, -0.012f, 0xFFD45C); xx += 2.6f }
             // crosswalk at the door
@@ -321,9 +428,9 @@ class WorldView(
                 while (zz < lay.d + 2f) { b.quadXZ(lay.w + 1.85f, zz, lay.w + 1.95f, zz + 0.8f, -0.012f, 0xF2F2F2); zz += 1.8f }
             }
             // back path
-            b.quadXZ(-1.2f, -1.6f, lay.w + 0.2f, -0.2f, -0.02f, 0xE9DCC4)
+            b.quadXZ(-1.2f, -1.6f, lay.w + 0.2f, -0.2f, -0.02f, 0xD9C7A8)
             ground = b.build("ground")
-            groundKey = key
+            groundLayout = lay; groundStore = style.store
         }
         M4.identity(m, 0)
         r.draw(ground!!, m, 0, shadow = false)
@@ -347,9 +454,9 @@ class WorldView(
             }
             // output tray stack
             val out = model?.anchor("out") ?: floatArrayOf(0.45f, 0.98f, 0.25f)
-            val im = mdl("food_${s.item.id}")
+            val im = mdl(foodModel[s.item.ordinal])
             var y = out[1]
-            for (k in 0 until min(s.tray, 14)) {
+            for (k in 0 until min(s.tray, 8)) {
                 drawModel(r, im, s.px + out[0], y, s.pz + out[2], (k % 3) * 0.2f, 0.95f, shadow = k == 0)
                 y += s.item.height * 0.92f
             }
@@ -367,7 +474,10 @@ class WorldView(
     }
 
     /** Item types shown on the counter racks, in menu order. */
-    fun rackItems(w: World): List<Item> = w.cfg.menu.take(4)
+    fun rackItems(w: World): List<Item> {
+        if (racksFor !== w.cfg) { racksFor = w.cfg; racks.clear(); for (i in 0 until min(4, w.cfg.menu.size)) racks.add(w.cfg.menu[i]) }
+        return racks
+    }
 
     private fun drawCounter(r: Renderer, w: World, trim: FloatArray) {
         val c = w.layout.counter
@@ -375,9 +485,10 @@ class WorldView(
         drawModel(r, model, c.x, 0f, c.z, 0f, 1f, trim, outline = true)
         drawModel(r, mdl("register_stand"), w.layout.cashierSpot.x, 0f, w.layout.cashierSpot.z, 0f, 1f, trim, shadow = false)
         val items = rackItems(w)
-        for ((k, it) in items.withIndex()) {
-            val a = model?.anchor("rack$k") ?: floatArrayOf(-0.9f + k * 0.55f, 0.97f, 0f)
-            val im = mdl("food_${it.id}")
+        for (k in items.indices) {
+            val it = items[k]
+            val a = model?.anchor(RACK[k]) ?: floatArrayOf(-0.9f + k * 0.55f, 0.97f, 0f)
+            val im = mdl(foodModel[it.ordinal])
             var y = a[1]
             val n = min(w.counterRacks[it.ordinal], 10)
             for (j in 0 until n) { drawModel(r, im, c.x + a[0], y, c.z + a[2], j * 0.4f, 0.9f, shadow = j == 0); y += it.height * 0.88f }
@@ -391,14 +502,16 @@ class WorldView(
         val pop = if (w.drivePop > 0f) 1.15f else 1f
         drawModel(r, model, dv.x, 0f, dv.z, dv.yaw, pop, trim, outline = true)
         val items = rackItems(w)
-        for ((k, it) in items.withIndex()) {
-            if (k > 1) break
-            val a = model?.anchor("rack$k") ?: floatArrayOf(-0.3f + k * 0.6f, 1.0f, 0f)
+        for (k in 0 until min(2, items.size)) {
+            val it = items[k]
+            val a = model?.anchor(RACK[k]) ?: floatArrayOf(-0.3f + k * 0.6f, 1.0f, 0f)
             // rotate anchor by yaw (+90°: x' = z, z' = -x)
             val ax = a[2]; val az = -a[0]
-            val im = mdl("food_${it.id}")
+            val im = mdl(foodModel[it.ordinal])
             var y = a[1]
-            val count = min(w.driveRacks[it.ordinal] + (if (k == 1) items.drop(2).sumOf { w.driveRacks[it.ordinal] } else 0), 10)
+            var extra = 0
+            if (k == 1) for (j in 2 until items.size) extra += w.driveRacks[items[j].ordinal]
+            val count = min(w.driveRacks[it.ordinal] + extra, 10)
             for (j in 0 until count) { drawModel(r, im, dv.x + ax, y, dv.z + az, j * 0.4f, 0.9f, shadow = false); y += it.height * 0.88f }
         }
     }
@@ -423,15 +536,28 @@ class WorldView(
     }
 
     private fun drawPiles(r: Renderer, w: World) {
-        for (pile in listOfNotNull(w.counterPile, w.drivePile)) {
-            if (pile.visual <= 0) continue
-            val coin = mdl("food_coin")
-            val towers = 4
+        // The register pile is drawn 0.35 m further from the counter than where it is collected (the magnet radius
+        // covers that easily): at its true spot the food racks on the counter and the cashier hid it.
+        drawPile(r, w.counterPile, dz = -0.35f)
+        w.drivePile?.let { drawPile(r, it) }
+    }
+
+    /**
+     * Money waiting at the register: banded cash bricks (`food_cash`) in a 2×2 footprint, stacked up to 8 high
+     * (the genre's "tall stack" reward; round 3 replaced the coin towers).
+     */
+    private fun drawPile(r: Renderer, pile: com.ngstudio.burgerready.game.CoinPile, dz: Float = 0f) {
+        run {
+            if (pile.visual <= 0) return
+            val cash = mdl("food_cash")
             val bounce = if (pile.bounce > 0f) sin(pile.bounce * 20f) * pile.bounce * 0.4f else 0f
-            for (k in 0 until pile.visual) {
-                val tw = k % towers; val lvl = k / towers
-                val ox = (tw % 2) * 0.2f - 0.1f; val oz = (tw / 2) * 0.2f - 0.1f
-                drawModel(r, coin, pile.x + ox, 0.02f + lvl * 0.04f * (1f + bounce), pile.z + oz, lvl * 0.5f + tw, 1f, shadow = lvl == 0, emit = 0.05f)
+            val n = min(pile.visual, 32)
+            for (k in 0 until n) {
+                val tw = k % 4; val lvl = k / 4
+                val ox = (tw % 2) * 0.235f - 0.1175f; val oz = (tw / 2) * 0.125f - 0.0625f
+                // a little untidy, like a real stack of bricks
+                val yaw = ((k * 37) % 7 - 3) * 0.025f
+                drawModel(r, cash, pile.x + ox, 0.01f + lvl * 0.046f * (1f + bounce), pile.z + dz + oz, yaw, 1f, shadow = lvl == 0, emit = 0.04f)
             }
         }
     }
@@ -441,17 +567,21 @@ class WorldView(
             if (!pad.visible || pad.done) continue
             val kind = pad.spec.kind
             val col = when (kind) {
-                PadKind.UPGRADE_STATION -> rgbF(0xFFC23C)
-                PadKind.HIRE -> rgbF(0x1FA6B8)
-                else -> rgbF(0x3DDC97)
+                PadKind.UPGRADE_STATION -> PAD_UPGRADE
+                PadKind.HIRE -> PAD_HIRE
+                PadKind.EXPAND -> PAD_EXPAND
+                else -> PAD_BUILD
             }
-            val model = mdl(when (kind) { PadKind.UPGRADE_STATION -> "upgrade_pad"; PadKind.HIRE -> "staff_pad"; else -> "pad" }) ?: mdl("pad")
+            val big = if (kind == PadKind.EXPAND) 1.5f else 1f
+            val model = mdl(when (kind) { PadKind.UPGRADE_STATION, PadKind.EXPAND -> "upgrade_pad"; PadKind.HIRE -> "staff_pad"; else -> "pad" }) ?: mdl("pad")
             val pop = if (pad.pop > 0f) 1f + sin((0.5f - pad.pop) / 0.5f * PI.toFloat() * 3f) * pad.pop * 0.5f else 1f
             val breathe = 1f + sin(time * 3f) * 0.025f
-            drawModel(r, model, pad.x, 0f, pad.z, 0f, pop * breathe, col, flash = if (pad.flash > 0f) 0.25f else 0f, shadow = false)
+            val affordable = w.cash >= pad.remaining
+            drawModel(r, model, pad.x, 0f, pad.z, 0f, pop * breathe * big, col, flash = if (pad.flash > 0f) 0.25f else 0f, shadow = false, emit = if (affordable) 0.12f + sin(time * 5f) * 0.06f else 0f)
             val fill = pad.paid.toFloat() / pad.spec.cost
-            r.sprite(pad.x, 0.09f, pad.z, 1.35f, 1.35f, atlas.uv("ring_dash"), 1f, 1f, 1f, 0.9f, rot = time * 0.6f, mode = 1)
-            if (fill > 0f) r.sprite(pad.x, 0.1f, pad.z, 1.3f, 1.3f, atlas.uv("ring_thick"), col[0], col[1], col[2], 1f, mode = 1, fill = fill)
+            r.sprite(pad.x, 0.09f, pad.z, 1.35f * big, 1.35f * big, atlas.uv("ring_dash"), 1f, 1f, 1f, 0.9f, rot = time * 0.6f, mode = 1)
+            if (fill > 0f) r.sprite(pad.x, 0.1f, pad.z, 1.3f * big, 1.3f * big, atlas.uv("ring_thick"), col[0], col[1], col[2], 1f, mode = 1, fill = fill)
+            if (affordable) r.sprite(pad.x, 0.06f, pad.z, 2.2f * big, 2.2f * big, atlas.uv("light_pool"), col[0], col[1], col[2], 0.35f + sin(time * 4f) * 0.1f, mode = 1)
             // ghost preview of what will be built
             when (kind) {
                 PadKind.BUILD_STATION -> { val s = w.stations[pad.spec.ref]; drawModel(r, mdl(s.spec.type.model), s.px, 0f, s.pz, 0f, 1f, trim, alpha = 0.28f + sin(time * 3f) * 0.06f) }
@@ -459,21 +589,38 @@ class WorldView(
                 PadKind.BUILD_DRIVE -> w.layout.drive?.let { drawModel(r, mdl("drive_window"), it.x, 0f, it.z, it.yaw, 1f, trim, alpha = 0.3f) }
                 else -> {}
             }
-            // price label + icon
-            val label = "$" + formatShort(pad.remaining)
-            val hover = 1.25f + sin(time * 3f + pad.index) * 0.06f
-            TextDraw.draw(r, atlas, cam, label, pad.x, hover, pad.z, 0.42f)
+            // price label, icon above it and the tag below it, spaced so they never touch
+            val label = padLabelFor(pad)
+            val big2 = if (kind == PadKind.EXPAND) 1.2f else 1f
+            val hover = padHover(kind) + sin(time * 3f + pad.index) * 0.06f
+            TextDraw.draw(r, atlas, cam, label, pad.x, hover, pad.z, 0.42f * big2,
+                1f, if (affordable) 1f else 0.82f, if (affordable) 1f else 0.78f)
             val icon = when (kind) {
-                PadKind.BUILD_STATION, PadKind.UPGRADE_STATION -> "icon_" + w.stations[pad.spec.ref].item.id
+                PadKind.BUILD_STATION, PadKind.UPGRADE_STATION -> iconName[w.stations[pad.spec.ref].item.ordinal]
                 PadKind.BUILD_TABLE -> "emo_happy"
                 PadKind.BUILD_DRIVE -> "icon_bag"
                 PadKind.HIRE -> "emo_love"
+                PadKind.EXPAND -> "star"
             }
-            r.sprite(pad.x, hover + 0.48f, pad.z, 0.5f, 0.5f, atlas.uv(icon))
-            val tag = when (kind) { PadKind.UPGRADE_STATION -> "UPGRADE"; PadKind.HIRE -> "HIRE " + com.ngstudio.burgerready.game.StaffRole.entries[pad.spec.ref / 10].label.uppercase(); PadKind.BUILD_DRIVE -> "DRIVE-THRU"; else -> "" }
-            if (tag.isNotEmpty()) TextDraw.draw(r, atlas, cam, tag, pad.x, hover - 0.36f, pad.z, 0.24f, col[0] * 0.6f + 0.4f, col[1] * 0.6f + 0.4f, col[2] * 0.6f + 0.4f)
+            r.sprite(pad.x, hover + 0.4f * big2 + 0.26f, pad.z, 0.5f, 0.5f, atlas.uv(icon), 1f, if (kind == PadKind.EXPAND) 0.8f else 1f, if (kind == PadKind.EXPAND) 0.2f else 1f)
+            val tag = when (kind) {
+                PadKind.UPGRADE_STATION -> "UPGRADE"
+                PadKind.HIRE -> hireTag[pad.spec.ref / 10]
+                PadKind.BUILD_DRIVE -> "DRIVE-THRU"
+                PadKind.EXPAND -> "NEW RESTAURANT"
+                else -> ""
+            }
+            if (tag.isNotEmpty()) TextDraw.draw(r, atlas, cam, tag, pad.x, hover - 0.31f * big2, pad.z, 0.24f * big2, col[0] * 0.6f + 0.4f, col[1] * 0.6f + 0.4f, col[2] * 0.6f + 0.4f)
         }
     }
+
+    /** Height of a pad's price label; the guide pointer floats above the icon that sits on top of it. */
+    private fun padHover(kind: PadKind) = if (kind == PadKind.EXPAND) 1.5625f else 1.25f
+
+    private val PAD_UPGRADE = rgbF(0xFFB81C)
+    private val PAD_HIRE = rgbF(0x1BA3D6)
+    private val PAD_EXPAND = rgbF(0xFF5FA2)
+    private val PAD_BUILD = rgbF(0x2ED58A)
 
     private fun drawTroubles(r: Renderer, w: World, cam: Camera) {
         for (t in w.troubles) {
@@ -498,7 +645,7 @@ class WorldView(
                 TroubleKind.SLEEPY -> { val c = t.customer ?: continue; alert(r, c.x, 1.9f, c.z, "zz", 0.6f, 0.7f, 1f) }
                 TroubleKind.RACCOON -> {
                     walkPose(pose, t.walkPhase, hypot(t.vx, t.vz), t.stolen.isNotEmpty(), 7)
-                    drawCharacter(r, mdl("char_raccoon"), t.x, t.z, t.yaw, pose, rgbF(0x2C2C34), 0.85f)
+                    drawCharacter(r, mdl("char_raccoon"), t.x, t.z, t.yaw, pose, RACCOON_TINT, 0.85f)
                     drawHeldStack(r, mdl("char_raccoon"), t.stolen, 0f)
                     if (t.phase < 2) alert(r, t.x, 1.6f, t.z, "exclaim", 1f, 1f, 1f)
                 }
@@ -516,11 +663,8 @@ class WorldView(
         for (p in w.powerUps) {
             val bob = 0.55f + sin(p.t * 4f) * 0.12f
             val fade = if (p.ttl < 2f) (if ((p.ttl * 6f).toInt() % 2 == 0) 0.4f else 1f) else 1f
-            val (icon, c) = when (p.kind) {
-                PowerUpKind.ESPRESSO -> "bolt" to rgbF(0x8B5A3C)
-                PowerUpKind.MAGNET -> "heart" to rgbF(0xE94B3C)
-                PowerUpKind.SPATULA -> "star" to rgbF(0xFFC23C)
-            }
+            val icon = puIcon[p.kind.ordinal]
+            val c = puRgb[p.kind.ordinal]
             r.sprite(p.x, 0.07f, p.z, 1.1f, 1.1f, atlas.uv("light_pool"), c[0], c[1], c[2], 0.6f * fade, mode = 1)
             r.sprite(p.x, bob, p.z, 0.7f, 0.7f, atlas.uv("badge"), 1f, 1f, 1f, fade)
             r.sprite(p.x, bob, p.z, 0.5f, 0.5f, atlas.uv(icon), c[0], c[1], c[2], fade, rot = sin(p.t * 3f) * 0.3f)
@@ -529,8 +673,8 @@ class WorldView(
 
     private fun drawCustomers(r: Renderer, w: World, cam: Camera) {
         for (c in w.customers) {
-            val model = mdl("char_" + c.species.id)
-            val shirt = rgbF(shirtColors[c.shirt % shirtColors.size])
+            val model = mdl(charModel[c.species.ordinal])
+            val shirt = shirtRgb[c.shirt % shirtRgb.size]
             val carrying = c.holding.isNotEmpty() && c.state != CState.EATING
             walkPose(pose, c.walkPhase, c.speed, carrying, c.id)
             var y = 0f
@@ -545,15 +689,18 @@ class WorldView(
                 else -> {}
             }
             val hat = if (c.vip) mdl("hat_crown") else if (c.critic) mdl("hat_beret") else null
-            val hatTint = if (c.critic) rgbF(0x2C3E66) else null
+            val hatTint = if (c.critic) CRITIC_HAT else null
+            blob(r, c.x, c.z, 0.75f)
             drawCharacter(r, model, c.x, c.z, c.yaw, pose, shirt, 0.92f, y, hat = hat, hatTint = hatTint, hatLift = hatLiftFor(c.species))
-            if (carrying) drawHeldStack(r, model, c.holding.take(2), 0f, 0.92f)
+            if (carrying) drawHeldStack(r, model, c.holding, 0f, 0.92f, max = 2)
             // emotes
             if (c.emote != 0) {
                 val icon = when (c.emote) { 1 -> "emo_happy"; 2 -> "emo_angry"; 3 -> "emo_love"; 4 -> "emo_sleep"; else -> "emo_wow" }
                 r.sprite(c.x, 1.75f + sin(time * 6f) * 0.04f, c.z, 0.5f, 0.5f, atlas.uv(icon))
             }
-            if ((c.state == CState.ORDERING || (c.state == CState.QUEUE && c.queueIdx <= 2)) && c.speed < 0.3f) orderBubble(r, cam, c.x, c.z, c.order, c.got, c.patience / c.maxPatience, c.queueIdx == 0, c.vip || c.critic)
+            // Order bubbles: the guest being served, plus a smaller one for the next in line (a third bubble stacked
+            // on top of the other two and hid the queue).
+            if ((c.state == CState.ORDERING || (c.state == CState.QUEUE && c.queueIdx <= 1)) && c.speed < 0.3f) orderBubble(r, cam, c.x, c.z, c.order, c.got, c.patience / c.maxPatience, c.queueIdx == 0, c.vip || c.critic)
         }
     }
 
@@ -564,23 +711,23 @@ class WorldView(
         for (i in order.indices) if (order[i] - got[i] > 0) bubbleItems.add(i)
         if (bubbleItems.isEmpty()) return
         val n = min(3, bubbleItems.size)
-        val s = if (front) 1f else 0.78f
-        val y = 1.95f * (if (front) 1f else 0.97f) + sin(time * 3f + x) * 0.03f
+        val s = if (front) 1f else 0.68f
+        val y = (if (front) 1.95f else 1.78f) + sin(time * 3f + x) * 0.03f
         val w = (0.62f + n * 0.5f) * s
         r.sprite(x, y, z, w, 0.82f * s, atlas.uv("bubble"), if (special) 1f else 1f, if (special) 0.93f else 1f, if (special) 0.7f else 1f, 1f)
         for (k in 0 until n) {
             val i = bubbleItems[k]
             val off = (k - (n - 1) / 2f) * 0.5f * s
             val px = x + cam.rightX * off; val pz = z + cam.rightZ * off; val py = y + 0.07f * s + cam.rightY * off
-            r.sprite(px - cam.rightX * 0.06f, py, pz - cam.rightZ * 0.06f, 0.44f * s, 0.44f * s, atlas.uv("icon_" + Item.entries[i].id))
+            r.sprite(px - cam.rightX * 0.06f, py, pz - cam.rightZ * 0.06f, 0.44f * s, 0.44f * s, atlas.uv(iconName[i]))
             val left = order[i] - got[i]
-            if (left > 1) TextDraw.draw(r, atlas, cam, left.toString(), px + cam.rightX * 0.16f * s, py - 0.13f * s, pz + cam.rightZ * 0.16f * s, 0.3f * s)
+            if (left > 1) TextDraw.draw(r, atlas, cam, if (left < countStr.size) countStr[left] else "9", px + cam.rightX * 0.16f * s, py - 0.13f * s, pz + cam.rightZ * 0.16f * s, 0.3f * s)
         }
         if (patience < 0.65f) {
             val bw = 0.9f * s
             val by = y - 0.5f * s
             r.sprite(x, by, z, bw, 0.14f * s, atlas.uv("bar_bg"))
-            val col = if (patience > 0.35f) rgbF(0xFFC23C) else rgbF(0xF2542D)
+            val col = if (patience > 0.35f) PATIENCE_MID else PATIENCE_LOW
             val fw = (bw - 0.04f) * patience.coerceIn(0f, 1f)
             val shift = (bw - 0.04f - fw) / 2f
             r.sprite(x - cam.rightX * shift, by - cam.rightY * shift, z - cam.rightZ * shift, fw, 0.1f * s, atlas.uv("bar_fill"), col[0], col[1], col[2])
@@ -590,7 +737,7 @@ class WorldView(
     private fun drawCars(r: Renderer, w: World) {
         for (car in w.cars) {
             val model = mdl(if (car.van) "van" else "car") ?: mdl("car")
-            val col = rgbF(carColors[car.color % carColors.size])
+            val col = carRgb[car.color % carRgb.size]
             if (model == null) continue
             M4.trs(root, 0, car.x, 0f, car.z, car.yaw, 1f, 1f, 1f)
             val spin = car.z * 2.2f
@@ -613,10 +760,11 @@ class WorldView(
 
     private fun drawStaff(r: Renderer, w: World) {
         for (s in w.staff) {
-            val model = mdl("char_" + s.species.id)
+            val model = mdl(charModel[s.species.ordinal])
             walkPose(pose, s.walkPhase, s.speed, s.stack.isNotEmpty(), s.hashCode() and 31)
             val pop = if (s.pop > 0f) 1f + s.pop * 0.3f else 1f
-            val shirt = when (s.role) { StaffRole.CASHIER -> rgbF(0x1FA6B8); StaffRole.RUNNER -> rgbF(0xFFC23C); StaffRole.CLEANER -> rgbF(0x3DDC97) }
+            val shirt = staffRgb[s.role.ordinal]
+            blob(r, s.x, s.z, 0.78f)
             drawCharacter(r, model, s.x, s.z, s.yaw, pose, shirt, 0.95f * pop, hat = mdl("hat_cap"), hatTint = shirt, hatLift = hatLiftFor(s.species))
             drawHeldStack(r, model, s.stack, 0f, 0.95f)
             if (s.role == StaffRole.CASHIER && s.state == SState.AT_POST && sin(time * 2f + s.x) > 0.95f) r.sprite(s.x, 1.8f, s.z, 0.35f, 0.35f, atlas.uv("emo_happy"))
@@ -625,15 +773,16 @@ class WorldView(
 
     private fun drawPlayer(r: Renderer, w: World, style: VisualStyle) {
         val p = w.player
-        val model = mdl("char_" + style.playerSpecies.id)
+        val model = mdl(charModel[style.playerSpecies.ordinal])
         walkPose(pose, p.walkPhase, p.speed, p.stack.isNotEmpty(), 0)
         if (w.espressoT > 0f && p.moving && particles.rnd() < 0.5f) particles.sparkles(p.x, 0.4f, p.z, 1, 0.9f, 0.6f, 0.3f, 0.2f)
         if (p.moving && particles.rnd() < 0.12f) particles.dust(p.x, p.z)
-        val apron = rgbF(style.apron)
-        drawCharacter(r, model, p.x, p.z, p.yaw, pose, apron, 1f, hat = style.playerHat?.let { mdl("hat_$it") }, hatTint = rgbF(0xF2542D), hatLift = hatLiftFor(style.playerSpecies))
+        blob(r, p.x, p.z, 0.85f)
+        drawCharacter(r, model, p.x, p.z, p.yaw, pose, apronC, 1f, hat = playerHat?.let { mdl(it) }, hatTint = HAT_RED, hatLift = hatLiftFor(style.playerSpecies))
         drawHeldStack(r, model, p.stack, p.sway, 1f)
         if (p.stack.size >= w.capacity) {
-            val h = (model?.anchor("hand")?.get(1) ?: 0.55f) + p.stack.sumOf { it.height.toDouble() }.toFloat() + 0.35f
+            var h = (model?.anchor("hand")?.get(1) ?: 0.55f) + 0.35f
+            for (i in p.stack.indices) h += p.stack[i].height
             TextDraw.draw(r, atlas, r.camera, "MAX", p.x, h + sin(time * 6f) * 0.04f, p.z, 0.32f, 1f, 0.35f, 0.25f)
         }
         // magnet aura
@@ -655,7 +804,8 @@ class WorldView(
     private var guideGoalX = 0f; private var guideGoalZ = 0f
 
     private fun drawGuide(r: Renderer, w: World) {
-        val g = w.guidanceTarget() ?: return
+        if (!w.guidanceTarget(guideTarget)) return
+        val g = guideTarget
         val p = w.player
         if (hypot(g[0] - p.x, g[1] - p.z) < 1.2f) return
         guideT -= 1f / 60f
@@ -685,13 +835,24 @@ class WorldView(
             carry = s - seg
             px = tx; pz = tz; i++
         }
-        // marker bouncing over the target
-        r.sprite(g[0], 1.3f + abs(sin(time * 4f)) * 0.3f, g[1], 0.55f, 0.66f, atlas.uv("pointer"), 1f, 0.56f, 0.69f)
+        // marker bouncing over the target; over a pad it floats above the pad's icon instead of covering the price
+        var baseY = 1.3f
+        for (i in w.pads.indices) {
+            val pad = w.pads[i]
+            if (pad.visible && !pad.done && abs(pad.x - g[0]) < 0.05f && abs(pad.z - g[1]) < 0.05f) {
+                val k = if (pad.spec.kind == PadKind.EXPAND) 1.2f else 1f
+                baseY = padHover(pad.spec.kind) + 0.4f * k + 0.26f + 0.62f; break
+            }
+        }
+        r.sprite(g[0], baseY + abs(sin(time * 4f)) * 0.3f, g[1], 0.55f, 0.66f, atlas.uv("pointer"), 1f, 0.56f, 0.69f)
     }
 
-    fun formatShort(v: Int): String = when {
-        v >= 1_000_000 -> String.format("%.1fM", v / 1_000_000f)
-        v >= 10_000 -> String.format("%.1fk", v / 1000f).replace(".0k", "k")
+    fun formatShort(v: Long): String = when {
+        v >= 1_000_000_000_000_000L -> String.format("%.1fQa", v / 1e15).replace(".0Qa", "Qa")
+        v >= 1_000_000_000_000L -> String.format("%.1fT", v / 1e12).replace(".0T", "T")
+        v >= 1_000_000_000L -> String.format("%.1fB", v / 1e9).replace(".0B", "B")
+        v >= 1_000_000L -> String.format("%.1fM", v / 1_000_000f)
+        v >= 10_000L -> String.format("%.1fk", v / 1000f).replace(".0k", "k")
         else -> v.toString()
     }
 }

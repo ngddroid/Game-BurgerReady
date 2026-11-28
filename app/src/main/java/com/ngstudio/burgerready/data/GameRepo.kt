@@ -5,11 +5,14 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateOf
 import com.ngstudio.burgerready.BuildConfig
 import com.ngstudio.burgerready.game.Cosmetics
-import com.ngstudio.burgerready.game.LevelGenerator
+import com.ngstudio.burgerready.game.GoldStars
+import com.ngstudio.burgerready.game.Item
+import com.ngstudio.burgerready.game.RestaurantProgress
+import com.ngstudio.burgerready.game.Restaurants
 import com.ngstudio.burgerready.game.Rng
-import com.ngstudio.burgerready.game.ShiftResult
 import com.ngstudio.burgerready.game.StatsCalc
 import com.ngstudio.burgerready.game.Stores
+import com.ngstudio.burgerready.game.Tour
 import com.ngstudio.burgerready.game.Upgrade
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,13 +21,22 @@ import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
 
-data class LevelReward(
-    val bucks: Long,
-    val gems: Int,
-    val newCards: List<Cards.Card>,
-    val rankUp: Int?,
-    val firstWin: Boolean,
-    val starsBefore: Int,
+/**
+ * What happened in a restaurant since the last save. The World keeps cumulative counters; the game screen
+ * diffs two snapshots and commits the difference every few seconds.
+ */
+data class SessionDelta(
+    val served: Int = 0,
+    val revenue: Long = 0,
+    val items: IntArray = IntArray(Item.entries.size),
+    val vips: Int = 0,
+    val troubles: Int = 0,
+    val trays: Int = 0,
+    val rushes: Int = 0,
+    val built: Int = 0,
+    val critics: Int = 0,
+    val bestCombo: Float = 1f,
+    val cards: Set<String> = emptySet(),
 )
 
 /** Single source of truth for progress. Compose observes [state]. All mutations go through [update]. */
@@ -37,8 +49,45 @@ class GameRepo(private val context: Context) {
 
     fun load() {
         val loaded = read(file) ?: read(backup)
-        if (loaded != null) state.value = loaded
+        if (loaded != null) state.value = if (loaded.selectedStore in loaded.stores) loaded else loaded.copy(selectedStore = "wagon", stores = loaded.stores + ("wagon" to (loaded.stores["wagon"] ?: 0)))
+        startIncomeClocks()
         ensureDaily()
+        // saves that finished the classic Voyage (finale and Golden Tour hook seen) before the World Tour existed
+        if (data.isComplete("candy") && "golden_tour" in data.story && !worldTourOpen()) openWorldTour(select = false)
+    }
+
+    // ------------------------------------------------------------------------------------- world tour
+    val firstTourId: String get() = Tour.id(0, 0)
+    fun worldTourOpen(): Boolean = firstTourId in data.stores
+
+    /** Opens the World Tour's first restaurant (after the classic finale). Returns its id. */
+    fun openWorldTour(select: Boolean = true): String {
+        val id = firstTourId
+        if (id in data.stores) { if (select) selectStore(id); return id }
+        val now = System.currentTimeMillis()
+        update {
+            it.copy(
+                stores = it.stores + (id to 0),
+                storeCollect = it.storeCollect + (id to now),
+                selectedStore = if (select) id else it.selectedStore,
+                counters = it.counters + ("storesOpened" to (it.stores.size + 1).toLong()),
+            )
+        }
+        return id
+    }
+
+    /** Regions whose flagship is finished (NEXT REGION bought, or the last one fully built). */
+    fun regionsComplete(): Int = Tour.REGIONS.indices.count { r -> data.isComplete(Tour.id(r, Tour.PER_REGION - 1)) }
+
+    /**
+     * Every open restaurant needs an idle-income start time. The Bun Wagon is open from the first launch but only
+     * got one at the first collect, so it earned nothing until then (pendingIncome treats a missing time as "now").
+     */
+    private fun startIncomeClocks() {
+        val missing = data.stores.keys.filter { it !in data.storeCollect }
+        if (missing.isEmpty()) return
+        val now = System.currentTimeMillis()
+        update { d -> d.copy(storeCollect = d.storeCollect + missing.associateWith { now }) }
     }
 
     @Synchronized
@@ -48,74 +97,125 @@ class GameRepo(private val context: Context) {
         io.execute { write(snapshot) }
     }
 
-    // ------------------------------------------------------------------------------------- levels
-    fun isUnlocked(level: Int): Boolean = level <= data.highestUnlocked || level in data.adUnlocked
-    fun currentLevel(): Int = min(data.highestUnlocked, LevelGenerator.MAX_LEVEL)
-
-    /** Debug builds only: unlock a level after the (mock) rewarded ad. */
-    fun adUnlock(level: Int) {
-        if (!BuildConfig.DEBUG_AD_UNLOCK) return
-        update { it.copy(adUnlocked = it.adUnlocked + level) }
-    }
-
+    // ------------------------------------------------------------------------------------- restaurants
     fun stats() = StatsCalc.stats(data.upgradeLevels(), data.selectedStore, data.selectedPet)
 
-    fun completeLevel(r: ShiftResult, cardsEarned: Set<String>, counters: Map<String, Long>): LevelReward {
-        val before = data.starsOf(r.levelId)
-        val firstWin = r.won && before == 0
-        var bucks = (LevelGenerator.reward(r.levelId) * LevelGenerator.starMultiplier(if (r.won) r.stars else 0)).toLong()
-        if (!r.won) bucks = max(10L, bucks)
-        var gems = 0
-        if (r.won && r.stars == 3 && before < 3) gems += 2
-        if (r.won && LevelGenerator.bossFor(r.levelId) != null && firstWin) gems += 5
-        val newCards = Cards.ALL.filter { it.id in cardsEarned && it.id !in data.cards }
-        val xpBefore = data.chefXp
-        val rankBefore = ChefRank.rankOf(xpBefore)
-        val xpAfter = xpBefore + r.served
-        val rankAfter = ChefRank.rankOf(xpAfter)
+    fun isOpen(storeId: String) = storeId in data.stores
+
+    /**
+     * Saves the running restaurant: its build progress, the wallet and what happened since the last commit.
+     * [playedMs] is the time spent playing in it since the last commit: its idle-income clock is moved forward by
+     * that much, so a restaurant earns "while you're away" only while you are actually away (playing in it used to
+     * accrue idle income on top of the cash earned at the register).
+     * Returns the Recipe cards that are new to the player.
+     */
+    fun commitRestaurant(storeId: String, progress: RestaurantProgress, cash: Long, delta: SessionDelta, playedMs: Long = 0L): List<Cards.Card> {
+        val newCards = Cards.ALL.filter { it.id in delta.cards && it.id !in data.cards }
+        val now = System.currentTimeMillis()
         update { d ->
-            val sb = StringBuilder(d.stars)
-            while (sb.length < r.levelId) sb.append('0')
-            if (r.won && r.stars > before) sb.setCharAt(r.levelId - 1, ('0' + r.stars))
             val c = d.counters.toMutableMap()
-            fun add(k: String, v: Long) { c[k] = (c[k] ?: 0L) + v }
-            add("served", r.served.toLong()); add("revenue", r.revenue.toLong()); add("played", 1)
-            if (r.won) add("wins", 1)
-            if (r.won && r.stars == 3 && before < 3) add("threestar", 1)
-            if (r.bestCombo >= 2.99f) add("combo3", 1)
-            for ((k, v) in counters) add(k, v)
-            c["stars"] = sb.toString().sumOf { ch -> (ch - '0').coerceAtLeast(0) }.toLong()
+            fun add(k: String, v: Long) { if (v != 0L) c[k] = (c[k] ?: 0L) + v }
+            add("served", delta.served.toLong()); add("revenue", delta.revenue); add("built", delta.built.toLong())
+            add("rushes", delta.rushes.toLong()); add("critics", delta.critics.toLong()); add("troubles", delta.troubles.toLong())
+            add("trays", delta.trays.toLong()); add("vips", delta.vips.toLong())
+            if (delta.bestCombo >= 2.99f) add("combo3", 1)
+            val last = d.storeCollect[storeId]
             d.copy(
-                stars = sb.toString(),
-                highestUnlocked = if (r.won) max(d.highestUnlocked, min(LevelGenerator.MAX_LEVEL, r.levelId + 1)) else d.highestUnlocked,
-                bucks = d.bucks + bucks,
-                gems = d.gems + gems,
-                cards = d.cards + newCards.map { it.id },
+                bucks = max(0L, cash),
+                restaurants = d.restaurants + (storeId to progress),
+                storeCollect = if (last != null && playedMs > 0L) d.storeCollect + (storeId to min(now, last + playedMs)) else d.storeCollect,
                 counters = c,
-                chefXp = xpAfter,
-                missions = progressMissions(d.missions, r, counters),
+                cards = d.cards + newCards.map { it.id },
+                chefXp = d.chefXp + delta.served,
+                missions = progressMissions(d.missions, delta),
             )
         }
-        return LevelReward(bucks, gems, newCards, if (rankAfter > rankBefore) rankAfter else null, firstWin, before)
+        return newCards
     }
 
-    private fun progressMissions(list: List<Mission>, r: ShiftResult, counters: Map<String, Long>): List<Mission> = list.map { m ->
-        val inc = when (m.kind) {
-            "serve" -> r.served
-            "revenue" -> r.revenue
-            "win" -> if (r.won) 1 else 0
-            "stars3" -> if (r.won && r.stars == 3) 1 else 0
-            "combo" -> if (r.bestCombo >= m.goal.toFloat() / 10f) m.goal else 0
-            "item" -> com.ngstudio.burgerready.game.Item.byId(m.item)?.let { r.itemsServed[it.ordinal] } ?: 0
-            "troubles" -> (counters["troubles"] ?: 0L).toInt()
-            "trays" -> (counters["trays"] ?: 0L).toInt()
-            "vips" -> (counters["vips"] ?: 0L).toInt()
-            else -> 0
+    /** Opens the restaurant after [fromStore] (the EXPAND pad was bought). Returns its id, or null at the end of the chain. */
+    fun openNextRestaurant(fromStore: String): String? {
+        val next = Restaurants.nextStoreId(fromStore) ?: return null
+        val now = System.currentTimeMillis()
+        val fromIndex = Restaurants.indexOf(fromStore)
+        // finishing a World Tour flagship stamps its region (a Recipe Book card and a bigger gem reward)
+        val regionDone = if (Tour.isFlagship(fromIndex)) "region_" + Tour.REGIONS[Tour.regionOf(fromIndex)].id else null
+        update {
+            it.copy(
+                stores = it.stores + (next to (it.stores[next] ?: 0)),
+                storeCollect = it.storeCollect + (next to (it.storeCollect[next] ?: now)),
+                selectedStore = next,
+                gems = it.gems + (if (regionDone != null) 40 else 15),
+                cards = it.cards + (if (Stores.isClassic(next)) setOf("store_$next") else emptySet()) + listOfNotNull(regionDone),
+                counters = it.counters + ("storesOpened" to (it.stores.size + 1).toLong()),
+            )
         }
-        if (m.kind == "combo") m.copy(progress = if (inc > 0) m.goal else m.progress) else m.copy(progress = min(m.goal, m.progress + inc))
+        return next
+    }
+
+    /** Debug builds only: finish the current restaurant (every pad bought) and open the next one. */
+    fun debugCompleteRestaurant() {
+        if (!BuildConfig.DEBUG_TOOLS) return
+        val id = data.selectedStore
+        val cfg = Restaurants.config(id)
+        update { it.copy(restaurants = it.restaurants + (id to RestaurantProgress(cfg.pads.map { p -> p.id }.toSet()))) }
+        openNextRestaurant(id)
+    }
+
+    /** Debug builds only: open the next restaurant after a (mock) rewarded ad, without finishing this one. */
+    fun adUnlockNext(): String? {
+        if (!BuildConfig.DEBUG_AD_UNLOCK) return null
+        val last = Restaurants.storeAt(data.frontier()).id
+        return openNextRestaurant(last)
+    }
+
+    private fun progressMissions(list: List<Mission>, r: SessionDelta): List<Mission> = list.map { m ->
+        val inc: Long = when (m.kind) {
+            "serve" -> r.served.toLong()
+            "revenue" -> r.revenue
+            "build" -> r.built.toLong()
+            "rush" -> r.rushes.toLong()
+            "combo" -> if (r.bestCombo >= m.goal.toFloat() / 10f) m.goal else 0L
+            "item" -> Item.byId(m.item)?.let { r.items[it.ordinal].toLong() } ?: 0L
+            "troubles" -> r.troubles.toLong()
+            "trays" -> r.trays.toLong()
+            "vips" -> r.vips.toLong()
+            else -> 0L
+        }
+        if (inc <= 0L) m
+        else if (m.kind == "combo") m.copy(progress = m.goal)
+        else m.copy(progress = min(m.goal, m.progress + inc))
     }
 
     fun doubleReward(bucks: Long) = update { it.copy(bucks = it.bucks + bucks) }
+
+    // ------------------------------------------------------------------------------------- story & gold stars
+    fun markStorySeen(id: String) { if (id !in data.story) update { it.copy(story = it.story + id) } }
+
+    /** Pages stamped so far (finished restaurants). */
+    fun stampedPages(): Int = Stores.ALL.count { data.isComplete(it.id) }
+    /** A page was stamped since the player last opened the Voyage Book. */
+    fun voyageHasNew(): Boolean = stampedPages() > data.voyageSeen
+    fun markVoyageSeen() { val n = stampedPages(); if (n != data.voyageSeen) update { it.copy(voyageSeen = n) } }
+
+    /**
+     * Records the gold stars met in [storeId] during this visit ([met] = bitmask from GoldStars.met).
+     * Returns how many are new. Each pays GoldStars.GEMS; the 36th also pays GoldStars.BOOK_GEMS.
+     */
+    fun awardGold(storeId: String, met: Int): Int {
+        if (!Stores.isClassic(storeId) || !data.isComplete(storeId)) return 0
+        val old = data.goldOf(storeId)
+        val fresh = met and 7 and old.inv()
+        if (fresh == 0) return 0
+        val n = GoldStars.count(fresh)
+        val before = data.goldTotal()
+        update { d ->
+            val total = before + n
+            val book = if (before < GoldStars.TOTAL && total >= GoldStars.TOTAL) GoldStars.BOOK_GEMS else 0
+            d.copy(gold = d.gold + (storeId to (old or fresh)), gems = d.gems + n * GoldStars.GEMS + book)
+        }
+        return n
+    }
 
     // ------------------------------------------------------------------------------------- upgrades
     fun buyUpgrade(u: Upgrade): Boolean {
@@ -129,9 +229,11 @@ class GameRepo(private val context: Context) {
 
     // ------------------------------------------------------------------------------------- stores
     fun incomeRate(storeId: String): Double {
-        val s = Stores.byId(storeId)
         val ren = data.stores[storeId] ?: return 0.0
-        return Stores.incomePerHour(s) * (1.0 + 0.10 * ren) * (1.0 + 0.04 * data.upgrade(Upgrade.INCOME))
+        val cfg = Restaurants.config(storeId)
+        val frac = data.progressOf(storeId).fraction(cfg)
+        return Restaurants.incomePerHour(cfg.index, frac) * (1.0 + 0.10 * ren) * (1.0 + 0.04 * data.upgrade(Upgrade.INCOME)) *
+            (1.0 + GoldStars.INCOME_BONUS * GoldStars.count(data.goldOf(storeId)))
     }
 
     fun pendingIncome(storeId: String, now: Long = System.currentTimeMillis()): Long {
@@ -143,21 +245,15 @@ class GameRepo(private val context: Context) {
 
     fun totalPendingIncome(now: Long = System.currentTimeMillis()): Long = data.stores.keys.sumOf { pendingIncome(it, now) }
 
+    /** Bucks per hour from every open restaurant together. */
+    fun totalIncomeRate(): Double = data.stores.keys.sumOf { incomeRate(it) }
+
     fun collectIncome(storeId: String? = null): Long {
         val now = System.currentTimeMillis()
         val ids = storeId?.let { listOf(it) } ?: data.stores.keys.toList()
         val amount = ids.sumOf { pendingIncome(it, now) }
         update { d -> d.copy(bucks = d.bucks + amount, storeCollect = d.storeCollect + ids.associateWith { now }) }
         return amount
-    }
-
-    fun openStore(id: String): Boolean {
-        val s = Stores.byId(id)
-        if (id in data.stores || data.bucks < s.cost) return false
-        val now = System.currentTimeMillis()
-        update { it.copy(bucks = it.bucks - s.cost, stores = it.stores + (id to 0), storeCollect = it.storeCollect + (id to now), selectedStore = id,
-            cards = it.cards + "store_$id", counters = it.counters + ("storesOpened" to (it.stores.size + 1).toLong())) }
-        return true
     }
 
     fun renovate(id: String): Boolean {
@@ -202,19 +298,20 @@ class GameRepo(private val context: Context) {
 
     private fun makeMissions(day: Long): List<Mission> {
         val r = Rng(day * 977 + 13)
-        val lvl = data.highestUnlocked
-        val scale = 1.0 + lvl / 40.0
+        val f = data.frontier()
+        val scale = 1.0 + f * 0.35
+        val unit = Restaurants.rewardUnit(f)
         val pool = mutableListOf(
-            { Mission("m1", "serve", "", (20 * scale).toInt() / 5 * 5, 0, (300 * scale).toLong(), 0, false) },
-            { Mission("m2", "revenue", "", (400 * scale * scale).toInt() / 50 * 50, 0, (350 * scale).toLong(), 0, false) },
-            { Mission("m3", "win", "", 3, 0, (250 * scale).toLong(), 2, false) },
-            { Mission("m4", "stars3", "", 2, 0, (300 * scale).toLong(), 3, false) },
-            { Mission("m5", "combo", "", 20, 0, (200 * scale).toLong(), 2, false) },
-            { Mission("m6", "item", "fries", (12 * scale).toInt(), 0, (250 * scale).toLong(), 0, false) },
-            { Mission("m7", "trays", "", (10 * scale).toInt(), 0, (220 * scale).toLong(), 0, false) },
+            { Mission("m1", "serve", "", ((25 * scale).toInt() / 5 * 5).toLong(), 0L, unit * 3, 0, false) },
+            { Mission("m2", "revenue", "", Restaurants.roundCost(600f * Restaurants.priceMul(f)), 0L, unit * 3, 0, false) },
+            { Mission("m3", "build", "", 3L, 0L, unit * 2, 2, false) },
+            { Mission("m5", "combo", "", 20L, 0L, unit * 2, 2, false) },
+            { Mission("m6", "item", "fries", ((12 * scale).toInt()).toLong(), 0L, unit * 2, 0, false) },
+            { Mission("m7", "trays", "", ((10 * scale).toInt()).toLong(), 0L, unit * 2, 0, false) },
         )
-        if (lvl >= 15) pool.add { Mission("m8", "troubles", "", 5, 0, (300 * scale).toLong(), 2, false) }
-        if (lvl >= 8) pool.add { Mission("m9", "vips", "", 3, 0, (280 * scale).toLong(), 2, false) }
+        if (f >= 1 || data.builtTotal() >= 8) pool.add { Mission("m4", "rush", "", 2L, 0L, unit * 3, 3, false) }
+        if (f >= 1) pool.add { Mission("m8", "troubles", "", 5L, 0L, unit * 3, 2, false) }
+        if (data.builtTotal() >= 6) pool.add { Mission("m9", "vips", "", 3L, 0L, unit * 3, 2, false) }
         val out = ArrayList<Mission>()
         while (out.size < 3 && pool.isNotEmpty()) { val i = r.int(pool.size); out.add(pool.removeAt(i)()) }
         return out
@@ -234,12 +331,22 @@ class GameRepo(private val context: Context) {
 
     fun canClaimLogin(): Boolean = data.loginClaimedDay != today()
 
+    /**
+     * Bucks a daily-calendar day or a spin segment pays, scaled to the newest restaurant like tasks and chests
+     * (a flat 200 Bucks meant nothing once pads cost millions). Restaurant 1 keeps the table values.
+     */
+    fun scaledBucks(base: Long): Long =
+        if (base <= 0L) 0L else Restaurants.roundCost((base * Restaurants.priceMul(data.frontier())).toFloat()).toLong()
+
+    fun loginBucks(day: Int): Long = scaledBucks(LoginRewards.DAYS[day.coerceIn(0, 6)].bucks)
+
     fun claimLogin(): LoginRewards.Reward? {
         if (!canClaimLogin()) return null
         val idx = data.loginStreak % 7
         val rw = LoginRewards.DAYS[idx]
+        val bucks = loginBucks(idx)
         val chest = if (rw.chest) chestReward() else 0L to 0
-        update { it.copy(loginClaimedDay = today(), loginStreak = (idx + 1) % 7, bucks = it.bucks + rw.bucks + chest.first, gems = it.gems + rw.gems + chest.second) }
+        update { it.copy(loginClaimedDay = today(), loginStreak = (idx + 1) % 7, bucks = it.bucks + bucks + chest.first, gems = it.gems + rw.gems + chest.second) }
         return rw
     }
 
@@ -252,12 +359,11 @@ class GameRepo(private val context: Context) {
         var pick = r.float() * SpinWheel.WEIGHTS.sum(); var idx = 0
         for (i in SpinWheel.WEIGHTS.indices) { pick -= SpinWheel.WEIGHTS[i]; if (pick <= 0f) { idx = i; break } }
         val seg = SpinWheel.SEGMENTS[idx]
-        val scale = 1.0 + data.highestUnlocked / 60.0
         val chest = if (seg.label == "CHEST") chestReward() else 0L to 0
         update { d ->
             val useFree = d.lastSpinDay != today()
             d.copy(lastSpinDay = if (useFree) today() else d.lastSpinDay, extraSpins = if (useFree) d.extraSpins else d.extraSpins - 1,
-                bucks = d.bucks + (seg.bucks * scale).toLong() + chest.first, gems = d.gems + seg.gems + chest.second)
+                bucks = d.bucks + scaledBucks(seg.bucks) + chest.first, gems = d.gems + seg.gems + chest.second)
         }
         return idx
     }
@@ -274,7 +380,7 @@ class GameRepo(private val context: Context) {
 
     fun chestReward(): Pair<Long, Int> {
         val r = Rng(System.nanoTime())
-        val base = LevelGenerator.reward(max(1, data.highestUnlocked))
+        val base = Restaurants.rewardUnit(data.frontier())
         return (base * r.range(2f, 4f)).toLong() / 10 * 10 to (if (r.chance(0.4f)) r.int(6) + 3 else 0)
     }
 
@@ -289,7 +395,8 @@ class GameRepo(private val context: Context) {
     fun achievementValue(key: String): Long = when (key) {
         "storesOpened" -> data.stores.size.toLong()
         "upgrades" -> data.upgrades.values.sum().toLong()
-        "stars" -> data.totalStars().toLong()
+        "built" -> data.builtTotal().toLong()
+        "regions" -> regionsComplete().toLong()
         else -> data.counter(key)
     }
 
@@ -314,6 +421,7 @@ class GameRepo(private val context: Context) {
     fun resetProgress() {
         val keep = data
         update { SaveData(onboardingDone = true, music = keep.music, sfx = keep.sfx, haptics = keep.haptics, musicVolume = keep.musicVolume, sfxVolume = keep.sfxVolume, quality = keep.quality) }
+        startIncomeClocks()
         ensureDaily()
     }
 
@@ -332,8 +440,18 @@ class GameRepo(private val context: Context) {
 
     companion object {
         fun toJson(d: SaveData): JSONObject = JSONObject().apply {
-            put("version", d.version); put("onboardingDone", d.onboardingDone); put("highestUnlocked", d.highestUnlocked)
-            put("stars", d.stars); put("adUnlocked", JSONArray(d.adUnlocked.toList())); put("bucks", d.bucks); put("gems", d.gems)
+            put("version", 3); put("onboardingDone", d.onboardingDone)
+            put("bucks", d.bucks); put("gems", d.gems)
+            put("restaurants", JSONObject().apply {
+                for ((id, p) in d.restaurants) put(id, JSONObject().apply {
+                    // v3: a fully bought restaurant is stored as {"all":1} (hundreds of them with the World Tour)
+                    if (p.paid.isEmpty() && isFullyBought(id, p)) put("all", 1)
+                    else {
+                        put("done", JSONArray(p.done.sorted()))
+                        put("paid", JSONObject().apply { for ((k, v) in p.paid) put(k.toString(), v) })
+                    }
+                })
+            })
             put("upgrades", JSONObject(d.upgrades as Map<*, *>)); put("stores", JSONObject(d.stores as Map<*, *>)); put("storeCollect", JSONObject(d.storeCollect as Map<*, *>))
             put("selectedStore", d.selectedStore); put("skins", JSONArray(d.skins.toList())); put("selectedSkin", d.selectedSkin)
             put("pets", JSONArray(d.pets.toList())); put("selectedPet", d.selectedPet); put("themes", JSONArray(d.themes.toList())); put("selectedTheme", d.selectedTheme)
@@ -345,10 +463,35 @@ class GameRepo(private val context: Context) {
             put("achievementsClaimed", JSONArray(d.achievementsClaimed.toList())); put("chefXp", d.chefXp); put("chefRankClaimed", d.chefRankClaimed)
             put("music", d.music); put("sfx", d.sfx); put("haptics", d.haptics); put("musicVolume", d.musicVolume.toDouble()); put("sfxVolume", d.sfxVolume.toDouble())
             put("quality", d.quality); put("highFps", d.highFps)
+            put("story", JSONArray(d.story.toList())); put("gold", JSONObject(d.gold as Map<*, *>)); put("voyageSeen", d.voyageSeen)
         }
 
         private fun strSet(a: JSONArray?): Set<String> { val s = HashSet<String>(); if (a != null) for (i in 0 until a.length()) s.add(a.getString(i)); return s }
         private fun intSet(a: JSONArray?): Set<Int> { val s = HashSet<Int>(); if (a != null) for (i in 0 until a.length()) s.add(a.getInt(i)); return s }
+        private fun knownStore(id: String) = Stores.isClassic(id) || Tour.indexOf(id) != null
+        private fun isFullyBought(id: String, p: RestaurantProgress): Boolean {
+            if (!knownStore(id)) return false
+            val pads = Restaurants.config(id).pads
+            return p.done.size == pads.size && pads.all { it.id in p.done }
+        }
+
+        private fun progressMap(o: JSONObject?): Map<String, RestaurantProgress> {
+            val m = HashMap<String, RestaurantProgress>()
+            if (o != null) for (k in o.keys()) {
+                val r = o.optJSONObject(k) ?: continue
+                if (r.optInt("all") == 1) {
+                    if (!knownStore(k)) continue
+                    m[k] = RestaurantProgress(Restaurants.config(k).pads.map { it.id }.toSet())
+                    continue
+                }
+                val done = intSet(r.optJSONArray("done"))
+                val paid = HashMap<Int, Long>()
+                r.optJSONObject("paid")?.let { po -> for (pk in po.keys()) pk.toIntOrNull()?.let { paid[it] = po.getLong(pk) } }
+                m[k] = RestaurantProgress(done, paid)
+            }
+            return m
+        }
+
         private fun intMap(o: JSONObject?): Map<String, Int> { val m = HashMap<String, Int>(); if (o != null) for (k in o.keys()) m[k] = o.getInt(k); return m }
         private fun longMap(o: JSONObject?): Map<String, Long> { val m = HashMap<String, Long>(); if (o != null) for (k in o.keys()) m[k] = o.getLong(k); return m }
 
@@ -356,10 +499,12 @@ class GameRepo(private val context: Context) {
             val def = SaveData()
             val ms = o.optJSONArray("missions")
             val missions = ArrayList<Mission>()
-            if (ms != null) for (i in 0 until ms.length()) { val m = ms.getJSONObject(i); missions.add(Mission(m.getString("id"), m.getString("kind"), m.optString("item"), m.getInt("goal"), m.getInt("progress"), m.getLong("rb"), m.getInt("rg"), m.getBoolean("claimed"))) }
+            if (ms != null) for (i in 0 until ms.length()) { val m = ms.getJSONObject(i); missions.add(Mission(m.getString("id"), m.getString("kind"), m.optString("item"), m.getLong("goal"), m.getLong("progress"), m.getLong("rb"), m.getInt("rg"), m.getBoolean("claimed"))) }
             return SaveData(
-                version = o.optInt("version", 1), onboardingDone = o.optBoolean("onboardingDone"), highestUnlocked = o.optInt("highestUnlocked", 1).coerceIn(1, LevelGenerator.MAX_LEVEL),
-                stars = o.optString("stars", ""), adUnlocked = intSet(o.optJSONArray("adUnlocked")), bucks = o.optLong("bucks", def.bucks), gems = o.optInt("gems", def.gems),
+                // v1 saves (level-based) keep their wallet, cosmetics and opened stores; level progress is dropped.
+                version = 3, onboardingDone = o.optBoolean("onboardingDone"),
+                bucks = o.optLong("bucks", def.bucks), gems = o.optInt("gems", def.gems),
+                restaurants = progressMap(o.optJSONObject("restaurants")),
                 upgrades = intMap(o.optJSONObject("upgrades")), stores = intMap(o.optJSONObject("stores")).ifEmpty { def.stores }, storeCollect = longMap(o.optJSONObject("storeCollect")),
                 selectedStore = o.optString("selectedStore", def.selectedStore), skins = strSet(o.optJSONArray("skins")).ifEmpty { def.skins }, selectedSkin = o.optString("selectedSkin", def.selectedSkin),
                 pets = strSet(o.optJSONArray("pets")).ifEmpty { def.pets }, selectedPet = o.optString("selectedPet", def.selectedPet),
@@ -371,6 +516,7 @@ class GameRepo(private val context: Context) {
                 achievementsClaimed = strSet(o.optJSONArray("achievementsClaimed")), chefXp = o.optLong("chefXp"), chefRankClaimed = o.optInt("chefRankClaimed", 1),
                 music = o.optBoolean("music", true), sfx = o.optBoolean("sfx", true), haptics = o.optBoolean("haptics", true),
                 musicVolume = o.optDouble("musicVolume", 0.7).toFloat(), sfxVolume = o.optDouble("sfxVolume", 1.0).toFloat(), quality = o.optString("quality", "auto"), highFps = o.optBoolean("highFps"),
+                story = strSet(o.optJSONArray("story")), gold = intMap(o.optJSONObject("gold")), voyageSeen = o.optInt("voyageSeen", 0),
             )
         }
     }

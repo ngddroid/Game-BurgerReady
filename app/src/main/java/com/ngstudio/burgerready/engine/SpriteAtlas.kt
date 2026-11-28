@@ -28,6 +28,13 @@ class SpriteAtlas(private val context: Context) {
         const val GLYPHS = "0123456789\$+-x.,kMBT!?%/:ABCDEFGHIJKLMNOPQRSTUVWXYZ "
         const val ICON_CELL = 112
         const val ICON_ORIGIN_Y = 640
+
+        /** The drawn atlas, kept for the process: every restaurant visit has a new GL context but the same pixels. */
+        private class Drawn(
+            val bmp: Bitmap, val regions: Map<String, FloatArray>, val advance: Map<Char, Float>,
+            val uv: Map<Char, FloatArray>, val aspect: Map<Char, Float>, val icons: Map<String, IntArray>,
+        )
+        @Volatile private var drawn: Drawn? = null
     }
 
     var texture = 0; private set
@@ -48,10 +55,19 @@ class SpriteAtlas(private val context: Context) {
     }
 
     fun build() {
-        val bmp = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
-        drawGlyphs(c)
-        drawShapes(c)
+        val cached = drawn
+        val bmp: Bitmap
+        if (cached != null && !cached.bmp.isRecycled) {
+            bmp = cached.bmp
+            regions.putAll(cached.regions); glyphAdvance.putAll(cached.advance); glyphUv.putAll(cached.uv)
+            glyphAspect.putAll(cached.aspect); iconSlots.putAll(cached.icons)
+        } else {
+            bmp = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            drawGlyphs(c)
+            drawShapes(c)
+            drawn = Drawn(bmp, HashMap(regions), HashMap(glyphAdvance), HashMap(glyphUv), HashMap(glyphAspect), HashMap(iconSlots))
+        }
         texture = GlUtil.genTexture()
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
@@ -61,7 +77,6 @@ class SpriteAtlas(private val context: Context) {
         // Premultiply happens in GLUtils for ARGB_8888 bitmaps.
         GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bmp, 0)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        bmp.recycle()
     }
 
     fun regenerateMipmaps() {

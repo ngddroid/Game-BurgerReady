@@ -38,56 +38,73 @@ void main() {
 }
 """
 
+    // Colour maths runs at mediump (twice the ALU rate on Mali Valhall); positions and the shadow lookup stay highp.
     val TOON_FS = """#version 300 es
-precision highp float;
+precision mediump float;
 precision mediump sampler2DShadow;
 in vec3 vNormal;
 in vec3 vColor;
-in vec4 vLightPos;
-in vec3 vWorld;
+in highp vec4 vLightPos;
+in highp vec3 vWorld;
 in vec4 vFx;
 uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uSkyColor;
-uniform vec3 uGroundColor;
-uniform vec3 uCamPos;
+uniform vec3 uSunColor;     // lit-side light (multiplier, ~1)
+uniform vec3 uSkyColor;     // shadow-side light: a coloured multiplier, never grey
+uniform vec3 uGroundColor;  // rim light colour
+uniform highp vec3 uCamPos;
 uniform vec3 uFogColor;
-uniform vec2 uFog;
+uniform highp vec2 uFog;
 uniform float uShadowOn;
-uniform float uTexel;
+uniform highp float uTexel;
 uniform float uNight;
+uniform float uSat;
+uniform highp vec4 uInterior; // x0, z0, x1, z1: the restaurant's floor rectangle
+uniform vec3 uInLit;        // lamp light inside it (evening stores)
+uniform vec3 uInShade;
+uniform float uInAmt;       // 0 = daytime everywhere, 1 = fully lamp-lit interior
 uniform sampler2DShadow uShadowMap;
 out vec4 frag;
 
+// One hardware-filtered (2x2 bilinear PCF) tap: crisp toon shadows at a quarter of the old 4-tap cost.
 float shadowAt() {
-    vec3 p = vLightPos.xyz / vLightPos.w * 0.5 + 0.5;
+    highp vec3 p = vLightPos.xyz / vLightPos.w * 0.5 + 0.5;
     if (p.x <= 0.001 || p.x >= 0.999 || p.y <= 0.001 || p.y >= 0.999 || p.z >= 1.0) return 1.0;
-    float z = p.z - 0.0018;
-    float s = texture(uShadowMap, vec3(p.xy + vec2(-0.6, -0.6) * uTexel, z));
-    s += texture(uShadowMap, vec3(p.xy + vec2( 0.6, -0.6) * uTexel, z));
-    s += texture(uShadowMap, vec3(p.xy + vec2(-0.6,  0.6) * uTexel, z));
-    s += texture(uShadowMap, vec3(p.xy + vec2( 0.6,  0.6) * uTexel, z));
-    return s * 0.25;
+    return texture(uShadowMap, vec3(p.xy, p.z - 0.0018));
+}
+
+// Identity below 0.84, then eases into 1.0: bright paint never clips to flat white.
+vec3 shoulder(vec3 c) {
+    vec3 k = max(c - 0.84, 0.0);
+    return min(c, 0.84 + 0.16 * (1.0 - exp(-k / 0.16)));
 }
 
 void main() {
     vec3 N = normalize(vNormal);
     float ndl = dot(N, uSunDir);
     float sh = uShadowOn > 0.5 ? shadowAt() : 1.0;
-    // Soft two-band toon terminator.
-    float lit = smoothstep(-0.04, 0.24, ndl) * sh;
-    float band = smoothstep(0.55, 0.75, ndl) * sh * 0.12;
-    vec3 hemi = mix(uGroundColor, uSkyColor, N.y * 0.5 + 0.5);
-    vec3 col = vColor * (hemi + uSunColor * (lit + band));
+    // Crisp cel terminator; cast shadows use the same coloured shade.
+    float lit = smoothstep(-0.02, 0.20, ndl) * sh;
+    float band = smoothstep(0.62, 0.80, ndl) * sh;
+    float form = 0.93 + 0.07 * N.y;                    // up-facing reads a touch brighter
+    // Inside the restaurant walls, evening stores use warm lamp light; outside stays night-blue.
+    highp vec2 dIn = min(vWorld.xz - uInterior.xy, uInterior.zw - vWorld.xz);
+    float inside = smoothstep(-0.35, 0.45, min(dIn.x, dIn.y)) * uInAmt;
+    vec3 sunC = mix(uSunColor, uInLit, inside);
+    vec3 skyC = mix(uSkyColor, uInShade, inside);
+    vec3 light = mix(skyC, sunC, lit) * form + sunC * band * 0.06;
+    vec3 col = vColor * light;
+    // Saturation: a little everywhere, more in shade, so shadows stay colourful instead of muddy.
+    float l = dot(col, vec3(0.299, 0.587, 0.114));
+    col = max(mix(vec3(l), col, uSat + (1.0 - lit) * 0.12), 0.0);
     vec3 V = normalize(uCamPos - vWorld);
     float fres = 1.0 - max(dot(N, V), 0.0);
-    float rim = fres * fres * fres * (0.18 + 0.32 * lit);
-    col += rim * mix(uSunColor, uSkyColor, 0.4) * 0.55;
+    col += fres * fres * fres * (0.05 + 0.08 * lit) * uGroundColor;
     // Emission (lamps, neon, screens) glows more at night.
     float e = vFx.y;
-    col = mix(col, vColor * (1.25 + uNight * 0.6) + vec3(0.05), e);
+    col = mix(col, vColor * (1.2 + uNight * 0.6) + vec3(0.04), e);
+    col = shoulder(col);
     col = mix(col, vec3(1.0, 0.98, 0.92), vFx.x);
-    float d = length(vWorld - uCamPos);
+    highp float d = length(vWorld - uCamPos);
     float fogT = smoothstep(uFog.x, uFog.y, d);
     col = mix(col, uFogColor, fogT);
     frag = vec4(col * vFx.z, vFx.z);

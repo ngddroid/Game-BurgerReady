@@ -94,7 +94,8 @@ These appear in stacks of up to 30, so keep them low-poly but rounded.
 | `shake` | Ø0.14, h0.30 | Clear-ish cup, pink shake, whipped cream dome, cherry |
 | `tray` | 0.36×0.26, h0.08 | Dirty tray: wrapper balls, empty cup, crumbs (what you clean) |
 | `bag` | 0.24×0.16, h0.26 | Paper takeaway bag (kraft colour) with a folded top |
-| `coin` | Ø0.16, h0.035 | Chunky gold coin with a raised rim and an embossed bun shape (gold/gold_dark), metal look |
+| `coin` | Ø0.16, h0.035 | Chunky gold coin with a raised rim and an embossed bun shape (gold/gold_dark), metal look. Used for the baked `icon_coin` sprite |
+| `cash` | 0.22×0.11, h0.047 | Banded brick of green bills (mustard band, tomato stamp, dark ovals). Stacked 2×2 × up to 8 at registers by `WorldView.drawPile` (≤ 400 tris; 256 today) |
 | `gem` | 0.14 | Faceted teal gem |
 | `patty_raw` | Ø0.24, h0.05 | Pink raw patty (sits on the grill) |
 
@@ -169,6 +170,32 @@ Footprints are in grid cells (X × Y in Blender). **Front = Blender -Y** (the si
 
 ---
 
-## 8. Audio: `assets/audio/sfx/<name>.wav` and `assets/audio/music/<name>.wav`
+## 7b. World Tour region props: `models/region_<region>_<prop>.bvm` (≤ 1,500 tris each; one part `root`, pivot at the bottom centre)
+Built by `tools/blender/regions.py`, 2–3 per region (55 in all), same conventions as the store props.
+- Footprint about 1.6 m and height at most 3 m, so they fit the three signature spots by the entrance.
+- Regions list them first in their prop pool (`game/TourRegions.kt`), followed by recoloured existing props.
+- Some double as a region's tree: `region_blossom_tree`, `region_savanna_acacia`, `region_amber_maple_tree`, `region_frostfest_festive_pine`, `region_springs_bamboo_grove`, `region_fossil_fern_clump`, `region_glade_giant_mushroom`.
+- `TourTest.regionModelsExist` fails if a name has no file.
+
+Region dioramas: `assets/ui/region_<region>.png` (480×384), rendered by `tools/blender/render_cards.py region_`. They show the hub/map art for every restaurant of the region; when one is missing, a drawn `RegionBadge` stands in.
+
+Layouts 9–16 (`game/Layouts.kt`) are generated in code like 1–8; no model work is needed.
+
+## 8. Story cast portraits: `assets/ui/cast_<id>.png` (512×512 RGBA)
+Rendered by `tools/blender/render_ui.py cast` with the same bust framing as the chef skins, from the game's own character and hat builders. Ids are what `game/Story.kt` `Speaker.portrait` names; when a file is missing the card shows `card_guest_<species>` instead (silently, so check the names).
+
+| Id | Character | Species + hat | Apron / hat tint |
+|---|---|---|---|
+| `cast_hazel` | Hazel, the mentor | bear + toque | brown / white |
+| `cast_fenna` | Fenna, the rival | fox + cap | navy / blue |
+| `cast_dot` | Dot, the regular | duck + beanie | mustard / teal |
+| `cast_scraps` | Scraps, the raccoon | raccoon + bandana | plum / red |
+| `cast_clementine` | Clementine, the critic | cat + beret | white / purple |
+
+Chef Patty uses `skin_patty`.
+
+---
+
+## 9. Audio: `assets/audio/sfx/<name>.wav` and `assets/audio/music/<name>.wav`
 SFX: 44.1 kHz mono 16-bit, peak ≈ -1 dBFS, no clicks at start/end (5 ms fades). Music: 22.05 kHz **stereo** 16-bit, seamless loops.
 See `tools/audio/README.md` (written by the audio script author) for the final list. The engine expects at least the names in `tools/audio/sfx_list.txt`.

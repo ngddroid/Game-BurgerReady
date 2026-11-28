@@ -1,5 +1,6 @@
 package com.ngstudio.burgerready.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -67,10 +68,12 @@ import com.ngstudio.burgerready.ui.theme.Type
 fun HomeScreen(
     initialTab: Int,
     onTab: (Int) -> Unit,
-    onPlay: (Int) -> Unit,
+    onPlay: () -> Unit,
     onSettings: () -> Unit,
     onRecipeBook: () -> Unit,
     onAchievements: () -> Unit,
+    onVoyage: () -> Unit,
+    onMap: () -> Unit,
 ) {
     var tab by remember { mutableIntStateOf(initialTab) }
     var prevTab by remember { mutableIntStateOf(initialTab) }
@@ -78,8 +81,20 @@ fun HomeScreen(
     val d = App.repo.state.value
     LaunchedEffect(Unit) {
         App.audio.playMusic("menu_theme")
-        if (App.repo.canClaimLogin() && d.highestUnlocked > 1) dialog = HomeDialog.Login
-        else if (App.repo.totalPendingIncome() >= 50 && d.stores.size > 1) dialog = HomeDialog.Income
+        // Welcome back: one card at most (income and/or today's calendar day). It waits behind the prologue.
+        dialog = AutoPopups.next()
+    }
+    // Saves from before the story existed never saw the Bun Wagon arrival: tell them the premise once.
+    var prologue by remember {
+        mutableStateOf(com.ngstudio.burgerready.game.Story.beat("prologue")?.takeIf {
+            d.onboardingDone && it.id !in d.story && "s0_arrive" !in d.story && (d.frontier() > 0 || d.isComplete("wagon"))
+        })
+    }
+    // Back closes the open dialog instead of stacking "Leaving?" on top of it
+    // (SpinCard registers its own handler that swallows Back while the wheel turns).
+    BackHandler(enabled = dialog != null) {
+        val cur = dialog
+        App.sfx("ui_back"); dialog = null
     }
     Box(Modifier.fillMaxSize().background(BV.Cream)) {
         Column(Modifier.fillMaxSize()) {
@@ -91,7 +106,7 @@ fun HomeScreen(
                     when (t) {
                         0 -> ShopTab { dialog = it }
                         1 -> KitchenTab()
-                        2 -> PlayTab(onPlay = onPlay, openDialog = { dialog = it }, onRecipeBook = onRecipeBook, onAchievements = onAchievements)
+                        2 -> PlayTab(onPlay = onPlay, openDialog = { dialog = it }, onRecipeBook = onRecipeBook, onAchievements = onAchievements, onVoyage = onVoyage, onMap = onMap)
                         3 -> StoresTab { dialog = it }
                         else -> StyleTab()
                     }
@@ -100,7 +115,43 @@ fun HomeScreen(
             }
             BottomBar(tab) { prevTab = tab; tab = it; onTab(it) }
         }
-        dialog?.let { HomeDialogs(it, onPlay = { lvl -> dialog = null; onPlay(lvl) }) { dialog = null } }
+        val pro = prologue
+        if (pro != null) {
+            BackHandler { }  // a few taps; Back waits for it
+            StoryScene(pro, "BEFORE PAGE ONE") { App.repo.markStorySeen(pro.id); prologue = null }
+        } else dialog?.let { cur ->
+            HomeDialogs(cur, onPlay = { dialog = null; onPlay() }) { dialog = null }
+        }
+    }
+}
+
+/**
+ * Which welcome dialog Home opens by itself: never more than one. Home is recreated every time the player comes
+ * back from Settings, the Recipe Book or a restaurant, so without this the popups reappeared on every return.
+ * Income is offered at most every 10 minutes and only when it is worth it; the daily calendar once per launch.
+ * When both are due they share one WELCOME BACK card (round 3 showed them back to back, after the prologue).
+ */
+private object AutoPopups {
+    private var incomeShownAt = 0L
+    private var loginShown = false
+
+    fun next(): HomeDialog? {
+        val repo = App.repo
+        val d = repo.data
+        if (d.builtTotal() < 3) return null
+        val now = System.currentTimeMillis()
+        val pending = repo.totalPendingIncome(now)
+        val worthIt = pending >= maxOf(50L, (repo.totalIncomeRate() / 12).toLong()) // ≥ 5 minutes of income
+        val income = worthIt && now - incomeShownAt > 10 * 60_000L
+        val login = !loginShown && repo.canClaimLogin()
+        if (income) incomeShownAt = now
+        if (login) loginShown = true
+        return when {
+            income && login -> HomeDialog.WelcomeBack
+            income -> HomeDialog.Income
+            login -> HomeDialog.Login
+            else -> null
+        }
     }
 }
 
@@ -137,14 +188,14 @@ fun TopBar(onSettings: () -> Unit, onRank: () -> Unit) {
 
 @Composable
 fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
-    val labels = listOf("Shop", "Kitchen", "Play", "Stores", "Style")
+    val labels = listOf("Shop", "Kitchen", "Play", "World", "Style")
     val icons = listOf(GIcon.SHOP, GIcon.KITCHEN, GIcon.PLAY, GIcon.STORE, GIcon.STYLE)
     val d = App.repo.state.value
     val badges = listOf(
         App.repo.canClaimFreeChest(),
         com.ngstudio.burgerready.game.Upgrade.entries.any { d.bucks >= it.cost(d.upgrade(it)) && d.upgrade(it) < it.maxLevel },
         false,
-        App.repo.totalPendingIncome() >= 50 || com.ngstudio.burgerready.game.Stores.ALL.any { it.id !in d.stores && d.bucks >= it.cost },
+        App.repo.totalPendingIncome() >= 50,
         false,
     )
     Box(Modifier.fillMaxWidth()) {
@@ -191,9 +242,11 @@ sealed class HomeDialog {
     data object Spin : HomeDialog()
     data object Missions : HomeDialog()
     data object Income : HomeDialog()
+    /** Income and the daily calendar together (both due on a return). */
+    data object WelcomeBack : HomeDialog()
     data object Rank : HomeDialog()
-    data class LevelInfo(val level: Int) : HomeDialog()
-    data class Unlock(val level: Int) : HomeDialog()
+    /** Debug builds only: mock rewarded ad that opens the next restaurant early. */
+    data object UnlockNext : HomeDialog()
     data class Reward(val title: String, val bucks: Long, val gems: Int) : HomeDialog()
     data class StoreDetail(val id: String) : HomeDialog()
 }

@@ -41,11 +41,12 @@ Every 3D model, HD illustration, icon, sound and music track in the game is **ge
 ### Model scripts
 | Script | Models | Run |
 |---|---|---|
-| `food.py` | `food_*` (burger, cheese, double, veggie, fries, soda, shake, tray, bag, coin, gem, patty_raw) | `-- [model names]` |
+| `food.py` | `food_*` (burger, cheese, double, veggie, fries, soda, shake, tray, bag, coin, cash, gem, patty_raw) | `-- [model names]` |
 | `stations.py` | `st_*`, counter, drive_window, tables, chair, trash bin, pads, register stand | `-- [model names]` |
 | `building.py` | floors, ground tiles, walls, windows, posts, door frame, road, crosswalk | `-- [model names]` |
 | `env.py` | trees, palm, bushes, planters, lamps, bench, menu board, neon sign, umbrella, car, van, scooter, cloud | `-- [model names]` |
-| `stores.py` | `store_<store>_<prop>` (3 signature props for each of 12 stores) | `-- [model names]` |
+| `regions.py` | `region_<region>_<prop>` (55 World Tour props, 2–3 per region) | `-- [model names] [--noprev]` |
+| `stores.py` | `store_<store>_<prop>` (3 signature props for each of the 12 classic restaurants; World Tour props are in `regions.py`) | `-- [model names]` |
 | `characters.py` | `char_<species>` (10 animals; rigid parts for procedural animation) | `-- [species] [--no-preview] [--no-lineup]` |
 | `hats.py` | `hat_<name>` (10 hats, built around a shared 0.36 m skull ring) | `-- [names] [--no-preview]` |
 | `pets.py` | `pet_<name>` (5 pets) | `-- [names] [--no-preview]` |
@@ -56,8 +57,8 @@ Each prop script has a `MODELS` dictionary: `name → (builder, tri budget, expo
 ### Render scripts (UI art)
 | Script | Produces | Run |
 |---|---|---|
-| `render_ui.py` | `skin_<id>` 512², `pet_<id>` 512², `card_guest_<species>` 256², `onboard_1..4` 1024², icon set (`tools/icon/icon_full/fg/bg.png`, `feature_graphic.png`) | `-- [skins pets cards onboard icon] [--only=<id>] [--fast]` (full run ≈6–8 min) |
-| `render_cards.py` | `store_<id>` 640×512, `theme_<id>` 512², `upgrade_<id>` 256², `card_food_<id>` 256² | `-- [name prefixes, e.g. theme_ store_lodge]` |
+| `render_ui.py` | `skin_<id>` 512², `pet_<id>` 512², `card_guest_<species>` 256², `cast_<id>` 512² (story cast, ≈15 s for all 5), `onboard_1..4` 1024², icon set (`tools/icon/icon_full/fg/bg.png`, `feature_graphic.png`) | `-- [skins pets cards cast onboard icon] [--only=<id>] [--fast]` (full run ≈6–8 min) |
+| `render_cards.py` | `region_<id>` 480×384 (25 World Tour dioramas, ≈6 s each), `store_<id>` 640×512, `theme_<id>` 512², `upgrade_<id>` 256², `card_food_<id>` 256² | `-- [name prefixes, e.g. theme_ store_lodge]` |
 | `scenes.py` | Composite scene checks in `tools/previews/scenes/` (not shipped) | — |
 
 UI renders use Subdivision Surface + smooth shading for HD quality; this applies to renders only, not to the game `.bvm` files. They have soft round contact shadows and a fully transparent background. Files over ~400 KB are palette-quantised.

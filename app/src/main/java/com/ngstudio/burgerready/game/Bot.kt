@@ -33,11 +33,22 @@ class Bot(private val w: World, private val skill: Float = 1f) {
         if (hypot(x - goalX, z - goalZ) > 0.3f || path == null || replanT <= 0f) {
             goalX = x; goalZ = z
             path = w.nav.path(w.player.x, w.player.z, x, z)
+            // An unreachable goal (e.g. a seat's approach point inside a wall) used to freeze the bot for good:
+            // try the nearest reachable spots around it instead.
+            if (path == null) for (k in OFFSETS.indices step 2) {
+                path = w.nav.path(w.player.x, w.player.z, x + OFFSETS[k], z + OFFSETS[k + 1])
+                if (path != null) break
+            }
             pathIdx = 0
             replanT = 1.2f
         }
         mode = m
         dwell = hold
+    }
+
+    private companion object {
+        /** Fallback approach offsets (x, z pairs), nearest first. */
+        val OFFSETS = floatArrayOf(0f, -0.9f, 0.9f, 0f, -0.9f, 0f, 0f, 0.9f, 0.8f, -0.8f, -0.8f, -0.8f, 0f, -1.6f, 1.6f, 0f, -1.6f, 0f)
     }
 
     private fun decide() {
@@ -51,7 +62,9 @@ class Bot(private val w: World, private val skill: Float = 1f) {
         }
         // 1) Pads we can afford outright (or are standing on).
         val pad = w.visiblePads().filter { w.cash >= it.remaining || (w.cash > 0 && near(p.x, p.z, it.x, it.z, 0.7f)) }.minByOrNull { it.index }
-        if (pad != null && p.stack.isEmpty()) { setGoal(pad.x, pad.z, 1); return }
+        // With a late-game carry capacity (World Tour: 18+) the stack is almost never empty, so waiting for empty
+        // hands meant never building: then any affordable pad wins. (Classic capacities stay below 18.)
+        if (pad != null && (p.stack.isEmpty() || (cap >= 18 && w.cash >= pad.remaining))) { setGoal(pad.x, pad.z, 1); return }
         // 2) Carrying trays → trash.
         if (p.stack.isNotEmpty() && p.stack[0] == Item.TRAY) { setGoal(lay.trashApproach.x, lay.trashApproach.z, 2); return }
         // 3) Carrying food → wherever it is needed (counter first), otherwise stock the counter.
@@ -82,9 +95,9 @@ class Bot(private val w: World, private val skill: Float = 1f) {
         }
         // 5) Collect coins when we need cash for the next pad, or the pile is big.
         val nextPad = w.visiblePads().minByOrNull { it.index }
-        val pileTotal = w.counterPile.amount + (w.drivePile?.amount ?: 0)
-        if (pileTotal > 0 && (nextPad != null && w.cash < nextPad.remaining && w.cash + pileTotal >= min(nextPad.remaining, 1)) || pileTotal > 120) {
-            val pile = if (w.counterPile.amount >= (w.drivePile?.amount ?: 0)) w.counterPile else w.drivePile!!
+        val pileTotal = w.counterPile.amount + (w.drivePile?.amount ?: 0L)
+        if (pileTotal > 0L && (nextPad != null && w.cash < nextPad.remaining && w.cash + pileTotal >= min(nextPad.remaining, 1L)) || pileTotal > 120L) {
+            val pile = if (w.counterPile.amount >= (w.drivePile?.amount ?: 0L)) w.counterPile else w.drivePile!!
             setGoal(pile.x, pile.z, 6); return
         }
         // 6) Fetch the most needed product.
@@ -164,15 +177,38 @@ class Bot(private val w: World, private val skill: Float = 1f) {
     }
 }
 
-/** Runs a whole shift headlessly. */
+/** Runs a restaurant headlessly with the bot until it is fully built (EXPAND bought) or [maxSeconds] pass. */
 object Simulator {
-    fun run(cfg: LevelConfig, stats: PlayerStats, skill: Float = 1f, dt: Float = 1f / 20f, maxExtra: Float = 300f): World {
-        val w = World(cfg, stats)
+    fun run(
+        cfg: RestaurantConfig, stats: PlayerStats, skill: Float = 1f, dt: Float = 1f / 20f,
+        maxSeconds: Float = 3600f, startCash: Long = 0L, saved: RestaurantProgress? = null,
+    ): World {
+        val w = World(cfg, stats, startCash = startCash, saved = saved)
         val bot = Bot(w, skill)
-        val limit = cfg.shiftSeconds + (if (cfg.overtime) maxExtra else 0f)
-        while (!w.finished && w.time < limit) {
+        val goal = cfg.pads.size
+        while (w.time < maxSeconds) {
             bot.update(dt)
             w.update(dt)
+            if (w.expanded || w.pads.count { it.done } >= goal) break
+        }
+        return w
+    }
+
+    /**
+     * Plays a restaurant for [seconds] with no stop condition (used for finished restaurants, where the goals are
+     * gold stars rather than pads). [every] is called once per simulated second.
+     */
+    fun play(
+        cfg: RestaurantConfig, stats: PlayerStats, saved: RestaurantProgress?, seconds: Float, skill: Float = 1f,
+        dt: Float = 1f / 20f, startCash: Long = 0L, every: ((World) -> Boolean)? = null,
+    ): World {
+        val w = World(cfg, stats, startCash = startCash, saved = saved)
+        val bot = Bot(w, skill)
+        var next = 1f
+        while (w.time < seconds) {
+            bot.update(dt)
+            w.update(dt)
+            if (every != null && w.time >= next) { next += 1f; if (every(w)) break }
         }
         return w
     }

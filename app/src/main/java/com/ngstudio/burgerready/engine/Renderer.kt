@@ -10,17 +10,26 @@ enum class Quality(val shadowSize: Int, val outlines: Boolean, val shadows: Bool
     HIGH(2048, true, true),
 }
 
-/** Per-scene lighting / atmosphere (changes over a shift: day → sunset → night). */
+/**
+ * Per-scene toon lighting. [sunColor] multiplies the lit side, [skyColor] the shadow side (a coloured shade,
+ * not grey), [groundColor] tints the rim light. [saturation] > 1 adds a little colour after lighting.
+ */
 class Lighting {
     val sunDir = floatArrayOf(-0.45f, 0.78f, 0.43f)
-    val sunColor = floatArrayOf(1.0f, 0.93f, 0.82f)
-    val skyColor = floatArrayOf(0.62f, 0.68f, 0.80f)
-    val groundColor = floatArrayOf(0.48f, 0.40f, 0.38f)
+    val sunColor = floatArrayOf(1.03f, 0.99f, 0.92f)
+    val skyColor = floatArrayOf(0.68f, 0.62f, 0.72f)
+    val groundColor = floatArrayOf(1f, 0.92f, 0.8f)
     val fogColor = floatArrayOf(0.98f, 0.86f, 0.70f)
-    var fogStart = 26f
-    var fogEnd = 60f
+    var fogStart = 48f
+    var fogEnd = 95f
     var night = 0f
+    var saturation = 1.14f
     val clearColor = floatArrayOf(0.98f, 0.86f, 0.70f)
+    /** World XZ rectangle (x0, z0, x1, z1) lit by [inLit]/[inShade] instead of the sun/sky, blended by [interiorAmt]. */
+    val interior = floatArrayOf(0f, 0f, 0f, 0f)
+    val inLit = floatArrayOf(1f, 1f, 1f)
+    val inShade = floatArrayOf(0.6f, 0.6f, 0.6f)
+    var interiorAmt = 0f
 
     fun normalizeSun() {
         val l = kotlin.math.sqrt(sunDir[0] * sunDir[0] + sunDir[1] * sunDir[1] + sunDir[2] * sunDir[2])
@@ -49,7 +58,7 @@ class Renderer(var quality: Quality) {
     companion object {
         const val INST_FLOATS = 24
         const val SPRITE_FLOATS = 16
-        val OUTLINE_COLOR = floatArrayOf(0.23f, 0.16f, 0.23f)
+        val OUTLINE_COLOR = floatArrayOf(0.20f, 0.13f, 0.20f)
     }
 
     val lighting = Lighting()
@@ -58,6 +67,9 @@ class Renderer(var quality: Quality) {
 
     private var toon = 0; private var depth = 0; private var outline = 0; private var spriteProg = 0
     private val uToon = HashMap<String, Int>()
+    private var uDepthLightVP = -1
+    private var uOutViewProj = -1; private var uOutWidth = -1; private var uOutColor = -1
+    private var uSprViewProj = -1; private var uSprRight = -1; private var uSprUp = -1; private var uSprTex = -1
     private var instanceVbo = 0
     private var instanceBuf: FloatBuffer = GlUtil.floatBuffer(INST_FLOATS * 2048)
 
@@ -88,9 +100,17 @@ class Renderer(var quality: Quality) {
         outline = GlUtil.program(Shaders.OUTLINE_VS, Shaders.OUTLINE_FS)
         spriteProg = GlUtil.program(Shaders.SPRITE_VS, Shaders.SPRITE_FS)
         for (n in listOf("uViewProj", "uLightVP", "uSunDir", "uSunColor", "uSkyColor", "uGroundColor", "uCamPos",
-            "uFogColor", "uFog", "uShadowOn", "uTexel", "uNight", "uShadowMap")) {
+            "uFogColor", "uFog", "uShadowOn", "uTexel", "uNight", "uSat", "uShadowMap", "uInterior", "uInLit", "uInShade", "uInAmt")) {
             uToon[n] = GLES30.glGetUniformLocation(toon, n)
         }
+        uDepthLightVP = GLES30.glGetUniformLocation(depth, "uLightVP")
+        uOutViewProj = GLES30.glGetUniformLocation(outline, "uViewProj")
+        uOutWidth = GLES30.glGetUniformLocation(outline, "uWidth")
+        uOutColor = GLES30.glGetUniformLocation(outline, "uColor")
+        uSprViewProj = GLES30.glGetUniformLocation(spriteProg, "uViewProj")
+        uSprRight = GLES30.glGetUniformLocation(spriteProg, "uCamRight")
+        uSprUp = GLES30.glGetUniformLocation(spriteProg, "uCamUp")
+        uSprTex = GLES30.glGetUniformLocation(spriteProg, "uTex")
         instanceVbo = GlUtil.genBuffer()
         setupSprites()
         setupShadows()
@@ -263,7 +283,7 @@ class Renderer(var quality: Quality) {
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
         GLES30.glDisable(GLES30.GL_BLEND)
-        mainPass(activeOpaque)
+        mainPass(activeOpaque, frontToBack = true)
         if (quality.outlines) outlinePass()
         if (activeTransparent.isNotEmpty()) {
             GLES30.glEnable(GLES30.GL_BLEND)
@@ -285,13 +305,8 @@ class Renderer(var quality: Quality) {
         if (instanceBuf.capacity() < floats) instanceBuf = GlUtil.floatBuffer(floats + INST_FLOATS * 512)
         instanceBuf.clear()
         var off = 0
-        for (list in arrayOf(activeOpaque, activeTransparent)) {
-            for (b in list) {
-                b.offsetBytes = off * 4
-                instanceBuf.put(b.data, 0, b.count * INST_FLOATS)
-                off += b.count * INST_FLOATS
-            }
-        }
+        for (b in activeOpaque) { b.offsetBytes = off * 4; instanceBuf.put(b.data, 0, b.count * INST_FLOATS); off += b.count * INST_FLOATS }
+        for (b in activeTransparent) { b.offsetBytes = off * 4; instanceBuf.put(b.data, 0, b.count * INST_FLOATS); off += b.count * INST_FLOATS }
         instanceBuf.position(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, instanceVbo)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, maxOf(4, floats * 4), if (floats > 0) instanceBuf else null, GLES30.GL_STREAM_DRAW)
@@ -334,7 +349,7 @@ class Renderer(var quality: Quality) {
         GLES30.glEnable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glPolygonOffset(1.6f, 2.5f)
         GLES30.glUseProgram(depth)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(depth, "uLightVP"), 1, false, lightVP, 0)
+        GLES30.glUniformMatrix4fv(uDepthLightVP, 1, false, lightVP, 0)
         for (b in activeOpaque) {
             if (!b.shadow) continue
             bindBatch(b); drawBatch(b)
@@ -342,7 +357,7 @@ class Renderer(var quality: Quality) {
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
     }
 
-    private fun mainPass(list: List<Batch>) {
+    private fun mainPass(list: List<Batch>, frontToBack: Boolean = false) {
         if (list.isEmpty()) return
         val L = lighting
         GLES30.glUseProgram(toon)
@@ -356,13 +371,21 @@ class Renderer(var quality: Quality) {
         GLES30.glUniform3fv(uToon["uFogColor"]!!, 1, L.fogColor, 0)
         GLES30.glUniform2f(uToon["uFog"]!!, L.fogStart, L.fogEnd)
         GLES30.glUniform1f(uToon["uNight"]!!, L.night)
+        GLES30.glUniform1f(uToon["uSat"]!!, L.saturation)
         val shadowsOn = shadowsThisFrame
         GLES30.glUniform1f(uToon["uShadowOn"]!!, if (shadowsOn) 1f else 0f)
         GLES30.glUniform1f(uToon["uTexel"]!!, if (shadowSize > 0) 1f / shadowSize else 0f)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (shadowsOn) shadowTex else dummyShadowTex)
         GLES30.glUniform1i(uToon["uShadowMap"]!!, 1)
-        for (b in list) { bindBatch(b); drawBatch(b) }
+        GLES30.glUniform4fv(uToon["uInterior"]!!, 1, L.interior, 0)
+        GLES30.glUniform3fv(uToon["uInLit"]!!, 1, L.inLit, 0)
+        GLES30.glUniform3fv(uToon["uInShade"]!!, 1, L.inShade, 0)
+        GLES30.glUniform1f(uToon["uInAmt"]!!, L.interiorAmt)
+        // Opaque batches arrive back-to-front (ground and floors first, characters last). Drawing them in reverse
+        // lets early-Z reject most of the floor and ground fragments hidden under furniture and characters.
+        if (frontToBack) for (i in list.indices.reversed()) { val b = list[i]; bindBatch(b); drawBatch(b) }
+        else for (b in list) { bindBatch(b); drawBatch(b) }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
@@ -371,9 +394,9 @@ class Renderer(var quality: Quality) {
         for (b in activeOpaque) if (b.outline) { any = true; break }
         if (!any) return
         GLES30.glUseProgram(outline)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(outline, "uViewProj"), 1, false, camera.viewProj, 0)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(outline, "uWidth"), 0.014f)
-        GLES30.glUniform3fv(GLES30.glGetUniformLocation(outline, "uColor"), 1, OUTLINE_COLOR, 0)
+        GLES30.glUniformMatrix4fv(uOutViewProj, 1, false, camera.viewProj, 0)
+        GLES30.glUniform1f(uOutWidth, 0.018f)
+        GLES30.glUniform3fv(uOutColor, 1, OUTLINE_COLOR, 0)
         GLES30.glCullFace(GLES30.GL_FRONT)
         for (b in activeOpaque) {
             if (!b.outline) continue
@@ -390,12 +413,12 @@ class Renderer(var quality: Quality) {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, spriteInstVbo)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, floats * 4, spriteBuf, GLES30.GL_STREAM_DRAW)
         GLES30.glUseProgram(spriteProg)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(spriteProg, "uViewProj"), 1, false, camera.viewProj, 0)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(spriteProg, "uCamRight"), camera.rightX, camera.rightY, camera.rightZ)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(spriteProg, "uCamUp"), camera.upX, camera.upY, camera.upZ)
+        GLES30.glUniformMatrix4fv(uSprViewProj, 1, false, camera.viewProj, 0)
+        GLES30.glUniform3f(uSprRight, camera.rightX, camera.rightY, camera.rightZ)
+        GLES30.glUniform3f(uSprUp, camera.upX, camera.upY, camera.upZ)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, spriteTexture)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(spriteProg, "uTex"), 0)
+        GLES30.glUniform1i(uSprTex, 0)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         GLES30.glDepthMask(false)

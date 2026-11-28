@@ -57,3 +57,27 @@ Add a dated entry whenever you make a decision that a future developer would oth
 ## 2026-11-25 — documentation pass
 - Added `README.md`, `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`, `tools/README.md`, and the `tools/blender/inspect_bvm.py` model inspector.
 - Collected the known issues and next steps in `DEVELOPER_GUIDE.md`.
+
+## 2026-11-27: continuous progression (round 1 redesign)
+- **Why:** players found that things they bought (tables, stations) "locked again" because every level rebuilt the restaurant from its config. Every successful arcade-idle game keeps what you build (see `MARKET_ANALYSIS.md`).
+- **Levels → restaurants:**
+  - `LevelGen.kt`, the tuner, `targets.bin`, bosses, mutators, stars and the shift timer are gone;
+  - `game/Restaurant.kt` defines 12 restaurants with fixed build plans;
+  - `World` restores `RestaurantProgress` (pad ids + partial payments) from the save.
+- **One wallet:** in-world cash is the Bucks wallet. Kitchen upgrades can be bought in-game (`GameSession.cashAdjust`).
+- **Validator:** `RestaurantFlowTest` replaces `AllLevelsValidatorTest` and checks:
+  - pacing windows for the expert bot;
+  - that a novice can finish restaurant 1;
+  - pad reachability and overlap;
+  - exact save restore;
+  - determinism.
+- **Free first grill:** restaurants 2–12 open with their first grill built (cost-0 pad), so a player who arrives with an empty wallet can still earn.
+- **Staff and NEW RESTAURANT pads** sit on the sidewalk by the door ("now hiring" spots), so they never collide with kitchen upgrade pads.
+- **Shading:**
+  - the toon shader's grey hemisphere ambient was replaced by a coloured shade colour plus a highlight shoulder (light surfaces were clipping to white);
+  - fog moved out of view;
+  - dusk dimming now applies only to night-themed stores.
+- **Cards and achievements:**
+  - the "Boss Days" and "Wild Shifts" card sets became "Milestones";
+  - the Wins/Stars/3★ achievement tracks became Master Builder, Rush Survivor and Critics' Darling.
+

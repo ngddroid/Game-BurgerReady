@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 import com.ngstudio.burgerready.ui.theme.BV
 
 /** Hand-drawn vector icons in the game style (cocoa outline + flat fills). */
-enum class GIcon { SHOP, KITCHEN, STORE, STYLE, GEAR, LOCK, SPIN, MISSION, CALENDAR, BOOK, TROPHY, CHEST, PLAY, CLOSE, PAUSE, MUSIC, SOUND, VIBRATE, DOC, SHIELD, STAR, HOME, RETRY, AD, BOLT, PAW, HAT, CLOCK, GIFT }
+enum class GIcon { SHOP, KITCHEN, STORE, STYLE, GEAR, LOCK, SPIN, MISSION, CALENDAR, BOOK, TROPHY, CHEST, PLAY, CLOSE, PAUSE, MUSIC, SOUND, VIBRATE, DOC, SHIELD, STAR, HOME, RETRY, AD, BOLT, PAW, HAT, CLOCK, GIFT, COMPASS }
 
 @Composable
 fun GameIcon(icon: GIcon, size: Dp = 28.dp, tint: Color? = null) {
@@ -181,6 +181,21 @@ fun DrawScope.drawGameIcon(icon: GIcon, tint: Color? = null) {
         GIcon.PAW -> {
             drawCircle(c, w * 0.22f, Offset(w * 0.5f, h * 0.64f)); drawCircle(tint ?: BV.Pink, w * 0.17f, Offset(w * 0.5f, h * 0.64f))
             for ((x, y) in listOf(0.22f to 0.38f, 0.4f to 0.22f, 0.6f to 0.22f, 0.78f to 0.38f)) { drawCircle(c, w * 0.1f, Offset(w * x, h * y)); drawCircle(tint ?: BV.Pink, w * 0.065f, Offset(w * x, h * y)) }
+        }
+        GIcon.COMPASS -> {
+            // the Voyage Book: a compass rose
+            drawCircle(c, w * 0.46f, center); drawCircle(tint ?: BV.Cream, w * 0.38f, center)
+            for (k in 0 until 8) {
+                val a = k * Math.PI / 4
+                val r0 = w * 0.3f; val r1 = w * 0.36f
+                drawLine(c, Offset(w / 2 + (kotlin.math.cos(a) * r0).toFloat(), h / 2 + (kotlin.math.sin(a) * r0).toFloat()),
+                    Offset(w / 2 + (kotlin.math.cos(a) * r1).toFloat(), h / 2 + (kotlin.math.sin(a) * r1).toFloat()), w * 0.04f, StrokeCap.Round)
+            }
+            val north = Path().apply { moveTo(w * 0.5f, h * 0.16f); lineTo(w * 0.62f, h * 0.5f); lineTo(w * 0.38f, h * 0.5f); close() }
+            val south = Path().apply { moveTo(w * 0.5f, h * 0.84f); lineTo(w * 0.62f, h * 0.5f); lineTo(w * 0.38f, h * 0.5f); close() }
+            drawPath(north, BV.Tomato); drawPath(south, BV.Teal)
+            drawPath(north, c, style = Stroke(w * 0.04f)); drawPath(south, c, style = Stroke(w * 0.04f))
+            drawCircle(c, w * 0.06f, center)
         }
         GIcon.CLOCK -> {
             drawCircle(c, w * 0.44f, center); drawCircle(tint ?: Color.White, w * 0.36f, center)
